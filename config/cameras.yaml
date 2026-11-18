@@ -1,0 +1,53 @@
+# Bootstrap camera entries only: imported into SQLite on first initialization when the camera table is empty.
+# After import, SQLite is the runtime source of truth; edits here do not update existing camera rows.
+# Configure initial RTSP addresses in .env. Each camera can independently use one or two streams.
+server:
+  host: 0.0.0.0
+  port: 8080
+inference:
+  model_path: /app/models/source/yolov12n-face.onnx
+  input_size: 640
+  confidence_threshold: 0.45
+  max_fps_per_camera: 3.0
+  intra_op_num_threads: 2
+  output_format: xyxy_score_class
+  normalized_boxes: false
+capture:
+  output_dir: /app/data
+  cooldown_seconds: 3.0
+  main_stream_match_tolerance_ms: 250
+  main_stream_buffer_seconds: 1.5
+  main_stream_ring_sample_interval_ms: 200
+  jpeg_quality: 96
+  face_jpeg_quality: 98
+  face_crop_padding_ratio: 0.25
+  # Generic software-side quality gates; calibrate with real day/night samples.
+  quality_assessment:
+    min_face_width_px: 48
+    min_face_height_px: 48
+    min_sharpness: 25.0
+    min_brightness: 18.0
+    max_brightness: 238.0
+    max_noise: 14.0
+    min_score: 45.0
+  main_stream_ring_jpeg_quality: 96
+cameras:
+  - id: camera-01
+    name: Camera 01
+    enabled: true
+    streams:
+      main:
+        url: ${CAMERA_01_MAIN_RTSP}
+        enabled: true
+      sub:
+        url: ${CAMERA_01_SUB_RTSP}
+        enabled: true
+  - id: camera-02
+    name: Camera 02
+    enabled: true
+    streams:
+      main:
+        url: ${CAMERA_02_MAIN_RTSP}
+        enabled: true
+      sub:
+        enabled: false

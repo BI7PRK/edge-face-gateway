@@ -1,0 +1,11 @@
+[project]
+name = "edge-face-gateway"
+version = "0.4.2"
+description = "Docker CPU runtime for multi-camera face detection and capture"
+requires-python = ">=3.10,<3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = ["test_*.py"]
+addopts = "-ra"

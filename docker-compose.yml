@@ -1,0 +1,33 @@
+services:
+  face-gateway:
+    build:
+      context: .
+      dockerfile: docker/dev/Dockerfile
+    image: edge-face-gateway:0.4.2-cpu
+    container_name: edge-face-gateway
+    init: true
+    working_dir: /app
+    environment:
+      FACE_CONFIG: /app/config/cameras.yaml
+      CAMERA_01_MAIN_RTSP: ${CAMERA_01_MAIN_RTSP:-}
+      CAMERA_01_SUB_RTSP: ${CAMERA_01_SUB_RTSP:-}
+      CAMERA_02_MAIN_RTSP: ${CAMERA_02_MAIN_RTSP:-}
+      CAMERA_02_SUB_RTSP: ${CAMERA_02_SUB_RTSP:-}
+      FACE_MODEL_PATH: ${FACE_MODEL_PATH:-/app/models/source/yolov12n-face.onnx}
+      FACE_OUTPUT_DIR: /app/data
+      FACE_DATA_DIR: /app/data
+      FACE_DATABASE_PATH: /app/data/database/gateway.db
+      FACE_SECRET_PATH: /app/data/secrets/camera.key
+      FACE_LOG_LEVEL: ${FACE_LOG_LEVEL:-INFO}
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-2}
+      OPENBLAS_NUM_THREADS: ${OPENBLAS_NUM_THREADS:-1}
+    ports:
+      - "${FACE_WEB_PORT:-8080}:8080"
+    volumes:
+      - ./config:/app/config:ro
+      - ./models:/app/models:ro
+      - ./data:/app/data
+      - ./logs:/app/logs:ro
+    command: ["python", "-m", "core.runtime.main"]
+    restart: unless-stopped
+    stop_grace_period: 20s
