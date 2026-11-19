@@ -32,12 +32,21 @@ _REQUIRED_COLUMNS: dict[str, set[str]] = {
     "system_settings": {"key", "value_json", "updated_at_ms"},
 }
 _CLOUD_COLUMNS = {"cloud_key", "cloud_uploaded_at_ms", "cloud_upload_status"}
+_AUTH_COLUMNS: dict[str, set[str]] = {
+    "system_users": {"id", "username", "password_hash", "is_active", "must_change_password",
+                     "created_at_ms", "updated_at_ms"},
+    "web_sessions": {"token_hash", "user_id", "created_at_ms", "expires_at_ms"},
+}
+_AUTH_INDEXES = {
+    "system_users": {"ix_system_users_active"},
+    "web_sessions": {"ix_web_sessions_user", "ix_web_sessions_expiry"},
+}
 _REQUIRED_INDEXES = {
     "capture_images": {"ix_capture_images_capture_id", "ix_capture_images_camera_id", "ix_capture_camera_time", "ix_capture_type_time"},
     "application_logs": {"ix_logs_time", "ix_logs_camera_time", "ix_logs_level_time"},
     "business_events": {"ix_events_time", "ix_events_type_time", "ix_events_camera_time"},
 }
-_KNOWN_REVISIONS = ("0001_initial_schema", "0002_cloud_storage", "0003_mqtt_outbox")
+_KNOWN_REVISIONS = ("0001_initial_schema", "0002_cloud_storage", "0003_mqtt_outbox", "0004_web_auth")
 log = logging.getLogger(__name__)
 
 
@@ -158,6 +167,24 @@ class Database:
                     f"{', '.join(missing_indexes)}. Database was left unchanged."
                 )
 
+            present_auth_tables = set(_AUTH_COLUMNS) & tables
+            has_auth_schema = bool(present_auth_tables)
+            if present_auth_tables:
+                if present_auth_tables != set(_AUTH_COLUMNS):
+                    raise DatabaseMigrationError("Existing SQLite database has a partial authentication schema; database was left unchanged.")
+                missing_auth_columns = []
+                missing_auth_indexes = []
+                for table, expected in _AUTH_COLUMNS.items():
+                    actual_columns = {column["name"] for column in inspector.get_columns(table)}
+                    missing_auth_columns.extend(f"{table}.{name}" for name in sorted(expected - actual_columns))
+                    actual_indexes = {index["name"] for index in inspector.get_indexes(table)}
+                    missing_auth_indexes.extend(f"{table}.{name}" for name in sorted(_AUTH_INDEXES[table] - actual_indexes))
+                if missing_auth_columns or missing_auth_indexes:
+                    details = missing_auth_columns + missing_auth_indexes
+                    raise DatabaseMigrationError(
+                        f"Existing SQLite authentication schema is incomplete ({', '.join(details)}); database was left unchanged."
+                    )
+
             capture_columns = {column["name"] for column in inspector.get_columns("capture_images")}
             present_cloud_columns = _CLOUD_COLUMNS & capture_columns
             if present_cloud_columns and present_cloud_columns != _CLOUD_COLUMNS:
@@ -175,8 +202,12 @@ class Database:
                     outbox_indexes = {index["name"] for index in inspector.get_indexes("mqtt_outbox")}
                     if "ix_mqtt_outbox_due" not in outbox_indexes:
                         raise DatabaseMigrationError("Existing mqtt_outbox table is missing ix_mqtt_outbox_due; database was left unchanged.")
-                    return "0003_mqtt_outbox"
+                    return "0004_web_auth" if has_auth_schema else "0003_mqtt_outbox"
+                if has_auth_schema:
+                    raise DatabaseMigrationError("Authentication tables require the MQTT outbox schema; database was left unchanged.")
                 return "0002_cloud_storage"
+            if has_auth_schema:
+                raise DatabaseMigrationError("Authentication tables require the MQTT outbox schema; database was left unchanged.")
             return "0001_initial_schema"
 
     def _backup(self) -> Path:

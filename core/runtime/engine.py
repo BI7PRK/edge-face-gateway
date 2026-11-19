@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 import re
@@ -261,21 +262,51 @@ class RuntimeEngine:
                                   "reason": "no_main_frame_within_timestamp_tolerance"})
             return
         runtime.last_capture_mono = now
-        camera_dir = self.output_dir / re.sub(r"[^A-Za-z0-9_.-]", "_", runtime.cfg.camera_id)
-        camera_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.fromtimestamp(source.wall_ts, timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
         capture_id = uuid.uuid4().hex
         quality = max(80, min(100, int(self.capture_cfg.get("jpeg_quality", 96))))
         face_quality = max(80, min(100, int(self.capture_cfg.get("face_jpeg_quality", 98))))
         padding = float(self.capture_cfg.get("face_crop_padding_ratio", 0.25))
+        faces = map_faces(detections, detection_frame.image.shape, source.image.shape)
+        threshold_raw = self.capture_cfg.get(
+            "min_capture_score",
+            self.capture_cfg.get("min_face_score", self.capture_cfg.get("capture_score_threshold", 0.78)),
+        )
+        try:
+            capture_score_threshold = float(threshold_raw)
+            if not math.isfinite(capture_score_threshold):
+                capture_score_threshold = 0.78
+            capture_score_threshold = min(1.0, max(0.0, capture_score_threshold))
+        except (TypeError, ValueError):
+            capture_score_threshold = 0.78
+        score_rejected_faces = [
+            {"face_index": index, "confidence": float(face.score)}
+            for index, face in enumerate(faces, start=1)
+            if face.score < capture_score_threshold
+        ]
+        if score_rejected_faces:
+            self.event_log.write({
+                "event_type": "capture.score_rejected", "status": "rejected",
+                "timestamp_ms": int(source.wall_ts * 1000), "capture_id": capture_id,
+                "camera_id": runtime.cfg.camera_id, "min_capture_score": capture_score_threshold,
+                "face_count": len(faces), "rejected_faces": score_rejected_faces,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
+        if faces and len(score_rejected_faces) == len(faces):
+            runtime.metrics.increment("faces_quality_rejected", len(score_rejected_faces))
+            return
+
+        camera_dir = self.output_dir / re.sub(r"[^A-Za-z0-9_.-]", "_", runtime.cfg.camera_id)
+        camera_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.fromtimestamp(source.wall_ts, timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
         original_path = camera_dir / f"{stamp}_frame.jpg"
         annotated_path = camera_dir / f"{stamp}_detections.jpg"
 
         # Evaluate quality on the original-resolution face ROI, before adding context padding.
-        faces = map_faces(detections, detection_frame.image.shape, source.image.shape)
         quality_cfg = self.capture_cfg.get("quality_assessment", {})
         quality_results = [assess_face_quality(source.image, face, quality_cfg) for face in faces]
-        capture_annotated = annotate_faces(source.image, faces, runtime.cfg.camera_id, quality_results)
+        capture_annotated = annotate_faces(
+            source.image, faces, runtime.cfg.camera_id, quality_results, capture_score_threshold
+        )
         saved_files: list[dict[str, Any]] = []
         if cv2.imwrite(str(original_path), source.image, [cv2.IMWRITE_JPEG_QUALITY, quality]):
             saved_files.append({"kind": "frame", "path": original_path, "width": source.image.shape[1],
@@ -312,9 +343,18 @@ class RuntimeEngine:
         accepted_count = 0
         rejected_count = 0
         for index, (face, quality_result) in enumerate(zip(faces, quality_results), start=1):
+            score_rejected = face.score < capture_score_threshold
             record = {"index": index, "score": round(face.score, 4),
                       "box": [face.x1, face.y1, face.x2, face.y2],
-                      "accepted": quality_result.accepted, "quality": quality_result.to_dict()}
+                      "accepted": quality_result.accepted and not score_rejected,
+                      "quality": quality_result.to_dict(),
+                      "min_capture_score": capture_score_threshold}
+            if score_rejected:
+                rejected_count += 1
+                record["accepted"] = False
+                record["quality"]["reasons"] = list(record["quality"]["reasons"]) + ["detection_score_too_low"]
+                face_records.append(record)
+                continue
             if not quality_result.accepted:
                 rejected_count += 1
                 face_records.append(record)

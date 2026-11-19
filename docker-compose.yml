@@ -9,10 +9,6 @@ services:
     working_dir: /app
     environment:
       FACE_CONFIG: /app/config/cameras.yaml
-      CAMERA_01_MAIN_RTSP: ${CAMERA_01_MAIN_RTSP:-}
-      CAMERA_01_SUB_RTSP: ${CAMERA_01_SUB_RTSP:-}
-      CAMERA_02_MAIN_RTSP: ${CAMERA_02_MAIN_RTSP:-}
-      CAMERA_02_SUB_RTSP: ${CAMERA_02_SUB_RTSP:-}
       FACE_MODEL_PATH: ${FACE_MODEL_PATH:-/app/models/source/yolov12n-face.onnx}
       FACE_OUTPUT_DIR: /app/data
       FACE_DATA_DIR: /app/data

@@ -1,5 +1,3 @@
-# Copy this file to cameras.yaml and replace the RTSP URLs.
-# Each camera independently selects dual-stream or single-stream mode.
 server:
   host: 0.0.0.0
   port: 8080
@@ -24,6 +22,8 @@ capture:
   jpeg_quality: 96
   face_jpeg_quality: 98
   face_crop_padding_ratio: 0.25
+  # Minimum detector confidence required before saving a face crop.
+  min_capture_score: 0.78
   # Generic software-side quality gates; calibrate with real day/night samples.
   quality_assessment:
     min_face_width_px: 48
@@ -34,26 +34,3 @@ capture:
     max_noise: 14.0
     min_score: 45.0
   main_stream_ring_jpeg_quality: 96
-
-cameras:
-  - id: camera-01
-    name: Entrance
-    enabled: true
-    streams:
-      main:
-        url: ${CAMERA_01_MAIN_RTSP}
-        enabled: true
-      sub:
-        url: ${CAMERA_01_SUB_RTSP}
-        enabled: true
-
-  - id: camera-02
-    name: Warehouse
-    enabled: true
-    streams:
-      # Single stream: used for both detection and capture.
-      main:
-        url: ${CAMERA_02_MAIN_RTSP}
-        enabled: true
-      sub:
-        enabled: false

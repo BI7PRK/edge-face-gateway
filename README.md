@@ -15,7 +15,8 @@ A detection is mapped from detector-frame coordinates to the selected source-fra
 - evaluates each face on its original-resolution face region before context padding;
 - saves only faces that pass the quality gates as `*_face_NNN_score_0.xxx.jpg`;
 - keeps the original and annotated full frames as diagnostic evidence, including rejected detections (rejected boxes are red);
-- records accepted/rejected counts, quality metrics and rejection reasons in `quality.face_accepted`, `quality.face_rejected` and `capture.manifest` records.
+- skips all image writes when every detected face is below `min_capture_score`, recording the rejected scores in `capture.score_rejected`;
+- records accepted/rejected counts, quality metrics and rejection reasons in `quality.face_accepted`, `quality.face_rejected` and `capture.manifest` records when at least one face meets the score threshold.
 
 Face crops are **image crops only**. The gateway does not perform identity recognition, feature/embedding extraction, person matching, tracking or biometric template creation. These crops can be used as source images for a later, separately designed person-comparison workflow; their suitability depends on camera resolution, focus, motion blur, face size and capture alignment.
 
@@ -26,6 +27,7 @@ Relevant `capture` settings in `config/cameras.yaml`:
 | `jpeg_quality` | 96 | Original and annotated frame JPEG quality |
 | `face_jpeg_quality` | 98 | Face crop JPEG quality |
 | `face_crop_padding_ratio` | 0.25 | Context padding relative to face-box width/height |
+| `min_capture_score` | 0.78 | Minimum detector confidence; face crops at or above this value may be saved |
 | `main_stream_ring_jpeg_quality` | 96 | JPEG quality in the dual-stream main-frame ring |
 | `main_stream_ring_sample_interval_ms` | 200 | Main-frame ring sampling interval |
 
@@ -33,7 +35,7 @@ JPEG quality is a compression setting, not a guarantee of optical detail. A crop
 
 ### Generic quality assessment
 
-The gateway does not control shutter, gain, IR illumination or vendor-specific camera settings. It evaluates the received image using face pixel dimensions, Laplacian sharpness (a blur proxy), brightness, contrast and a simple noise estimate. Face size, sharpness and exposure are hard gates; a high score cannot override a failed hard gate. Rejected face crops are not added to the face-crop album, but full-frame and annotated diagnostic images remain available. `quality.face_accepted` and `quality.face_rejected` records contain the measured values and rejection reasons.
+The gateway does not control shutter, gain, IR illumination or vendor-specific camera settings. It evaluates the received image using face pixel dimensions, Laplacian sharpness (a blur proxy), brightness, contrast and a simple noise estimate. Face size, sharpness and exposure are hard gates; a high score cannot override a failed hard gate. Rejected face crops are not added to the face-crop album, but full-frame and annotated diagnostic images remain available when another face in the same capture meets `min_capture_score`. Captures where every face is below that threshold are not written to disk. `quality.face_accepted` and `quality.face_rejected` records contain the measured values and rejection reasons; `capture.score_rejected` records detector scores below the capture threshold.
 
 Initial thresholds are deliberately generic starting points, not validated universal values. Calibrate `capture.quality_assessment` with representative day/night footage from each deployment. A single-frame sharpness metric cannot reliably distinguish motion blur from defocus, poor optics or compression; the current release flags low sharpness without claiming to identify its physical cause. Best-frame selection across time is deferred to v0.1.4.
 
@@ -79,12 +81,11 @@ Requirements: Docker Desktop / Docker Engine with Linux containers and Docker Co
 
 ```powershell
 Copy-Item .env.example .env
-# Edit .env and set RTSP addresses.
 docker compose build
 docker compose up -d
 ```
 
-Default model is `yolov12n-face.onnx`. Set `FACE_MODEL_PATH=/app/models/source/yolov12s-face.onnx` in `.env` to switch models.
+Default model is `yolov12n-face.onnx`. Set `FACE_MODEL_PATH=/app/models/source/yolov12s-face.onnx` in `.env` to switch models. Add cameras and their RTSP stream URLs through the **Camera management** page after startup.
 
 ## 6. Validation
 
@@ -108,8 +109,7 @@ v0.2.0 introduces SQLite-backed persistence while keeping the v0.1.3 detection a
 
 - SQLite database: `data/database/gateway.db` (override with `FACE_DATABASE_PATH`).
 - Schema migrations are managed by Alembic and run at startup.
-- Existing `config/cameras.yaml` camera entries are imported into SQLite when the camera table is empty. RTSP URLs are encrypted using Fernet; the key is stored separately at `data/secrets/camera.key` (override with `FACE_SECRET_PATH`, or provide `FACE_SECRET_KEY`).
-- After camera rows exist, SQLite is the runtime source of truth. Changes to YAML camera entries are not reloaded at runtime. In v0.4.0, camera records and video sources are maintained from `/cameras`; changes are persisted to SQLite and applied to only the affected camera Worker.
+- Camera records and video sources are managed from `/cameras` and persisted in SQLite; RTSP URLs are encrypted using Fernet. The key is stored separately at `data/secrets/camera.key` (override with `FACE_SECRET_PATH`, or provide `FACE_SECRET_KEY`).
 - Keep the database, secret key and any `database/pending-logs.jsonl` spool together in protected persistent storage and include them in backups. Losing the key makes encrypted RTSP URLs unrecoverable.
 
 ### Images, events and application logs
@@ -131,8 +131,8 @@ SQLite uses WAL mode, foreign-key enforcement and a 5-second busy timeout. The d
 2. Back up the existing `data/`, `config/` and `.env` directories/files.
 3. Replace the application files with v0.2.0 while preserving the existing `data/` and `models/` directories.
 4. Build and start with `docker compose build` and `docker compose up -d`.
-5. On first startup, Alembic creates the database schema, imports configured camera entries from YAML, indexes existing JPEG files and imports `logs/runtime.jsonl`. Verify `/api/status`, `/api/captures`, `/api/events` and `/api/logs`.
-6. After the import, manage camera records through the database in future releases; editing YAML no longer updates existing database records.
+5. On first startup, Alembic creates the database schema, indexes existing JPEG files and imports `logs/runtime.jsonl`. Add cameras through `/cameras`, then verify `/api/status`, `/api/captures`, `/api/events` and `/api/logs`.
+6. Camera records are managed through `/cameras` and persisted in SQLite; camera entries are not loaded from YAML.
 
 Do not test the migration against the only copy of production data. The migration creates a new database and does not delete existing image files.
 
@@ -229,8 +229,18 @@ All events are published to `{topic_prefix}/{gateway_id}/events` as UTF-8 JSON. 
 
 1. Stop the existing container and back up the entire `data/` directory.
 2. Replace application files with v0.4.2 while preserving `data/`, `models/`, `config/` and `.env`.
-3. Run `docker compose build` and `docker compose up -d`. Alembic applies `0003_mqtt_outbox` and preserves existing camera, capture, event and S3 metadata.
+3. Run `docker compose build` and `docker compose up -d`. Alembic applies `0003_mqtt_outbox` and `0004_web_auth` while preserving existing camera, capture, event and S3 metadata.
 4. Open `/settings`, configure the MQTT Broker, Gateway ID, Client ID and topic prefix, save, then click **发送测试消息**.
 5. Subscribe a test client to `edge-face-gateway/{gateway_id}/#` (or your configured prefix) and verify the test event. Then validate the six business events with actual cameras and S3 storage.
 
 The MQTT Broker is not bundled into the gateway Compose file. It can be the existing Home Assistant MQTT Broker or a separately managed Mosquitto/EMQX service. Home Assistant MQTT Discovery and inbound control commands are not included in v0.4.2.
+
+
+## Web login and system users
+
+- All web pages and business APIs require login. Only the login endpoint and page are available before authentication.
+- A new installation creates the initial `admin` account with password `admin`. The first login is restricted to changing this password; use the gateway only on a trusted network until it has been changed.
+- Passwords are stored as salted PBKDF2-HMAC-SHA256 hashes, never as plaintext or reversible ciphertext. New and reset passwords must be at least 6 characters.
+- Sessions use expiring, revocable server-side records; browser cookies are HttpOnly and SameSite=Lax, and use the Secure attribute when served over HTTPS. Put deployments accessed over a network behind TLS.
+- Open `/users` to add accounts, rename users, reset passwords, disable accounts or delete accounts. Every account has administrator privileges. The final active account cannot be disabled or deleted.
+- Alembic migration `0004_web_auth` adds the account and session tables. Existing installations are migrated on startup; the initial account is created only when the user table is empty.

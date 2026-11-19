@@ -10,16 +10,15 @@ from core.infrastructure.security import SecretCipher
 from sqlalchemy import select
 
 
-def test_alembic_migration_creates_schema_and_camera_seed_is_database_backed(tmp_path: Path):
+def test_alembic_migration_creates_schema_and_camera_records_are_database_backed(tmp_path: Path):
     db = Database(tmp_path / "database" / "gateway.db")
     db.migrate()
     cipher = SecretCipher(tmp_path / "secrets" / "camera.key")
     repo = CameraRepository(cipher)
-    config = {"cameras": [{"id": "front-01", "name": "Front", "enabled": True,
-        "streams": {"main": {"url": "rtsp://user:secret@127.0.0.1/main", "enabled": True},
-                    "sub": {"url": "rtsp://127.0.0.1/sub", "enabled": True}}}]}
     with db.sessions.begin() as session:
-        assert repo.seed_from_legacy_config(session, config) == 1
+        repo.create(session, camera_id="front-01", name="Front",
+                    main_url="rtsp://user:secret@127.0.0.1/main",
+                    sub_url="rtsp://127.0.0.1/sub", detection_fps=3)
     with db.sessions() as session:
         row = session.get(Camera, "front-01")
         assert row is not None
@@ -27,8 +26,6 @@ def test_alembic_migration_creates_schema_and_camera_seed_is_database_backed(tmp
         cameras = repo.list_enabled(session)
         assert cameras[0].main_url == "rtsp://user:secret@127.0.0.1/main"
         assert cameras[0].mode == "dual"
-    with db.sessions.begin() as session:
-        assert repo.seed_from_legacy_config(session, config) == 0
     db.close()
 
 
@@ -130,7 +127,7 @@ def test_existing_unversioned_v0001_database_is_stamped_and_upgraded_without_rec
     db.migrate()
 
     with db.engine.connect() as connection:
-        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0003_mqtt_outbox"
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0004_web_auth"
         assert connection.exec_driver_sql("SELECT name FROM cameras WHERE id='front'").scalar_one() == "Front"
         columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(capture_images)")}
         assert {"cloud_key", "cloud_uploaded_at_ms", "cloud_upload_status"}.issubset(columns)
@@ -153,7 +150,7 @@ def test_existing_unversioned_current_database_is_stamped_without_running_initia
     db.migrate()
 
     with db.engine.connect() as connection:
-        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0003_mqtt_outbox"
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0004_web_auth"
         assert connection.exec_driver_sql("SELECT name FROM cameras WHERE id='rear'").scalar_one() == "Rear"
     db.close()
 
@@ -184,7 +181,7 @@ def test_concurrent_startup_migration_is_serialized(tmp_path: Path):
         results = list(executor.map(lambda database: database.migrate(), (first, second)))
     assert results == [None, None]
     with first.engine.connect() as connection:
-        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0003_mqtt_outbox"
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0004_web_auth"
     first.close()
     second.close()
 
@@ -201,7 +198,7 @@ def test_empty_alembic_version_table_with_existing_schema_is_recovered(tmp_path:
     db.migrate()
 
     with db.engine.connect() as connection:
-        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0003_mqtt_outbox"
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0004_web_auth"
         assert connection.exec_driver_sql("SELECT name FROM cameras WHERE id='existing'").scalar_one() == "Existing"
     assert len(list((db_path.parent / "backups").glob("gateway-*.sqlite3"))) == 1
     db.close()
@@ -215,12 +212,12 @@ def test_empty_database_with_empty_version_marker_can_initialize(tmp_path: Path)
     db.migrate()
 
     with db.engine.connect() as connection:
-        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0003_mqtt_outbox"
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0004_web_auth"
         assert "cameras" in {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
     db.close()
 
 
-def test_v041_database_upgrades_to_mqtt_outbox_and_removes_legacy_rmq_setting(tmp_path: Path):
+def test_v041_database_upgrades_to_current_schema_and_removes_legacy_rmq_setting(tmp_path: Path):
     import json
     from alembic import command
     from core.infrastructure.database.models import SystemSetting
@@ -237,7 +234,7 @@ def test_v041_database_upgrades_to_mqtt_outbox_and_removes_legacy_rmq_setting(tm
     db.migrate()
 
     with db.engine.connect() as connection:
-        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0003_mqtt_outbox"
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "0004_web_auth"
         tables = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "mqtt_outbox" in tables
     with db.sessions() as session:

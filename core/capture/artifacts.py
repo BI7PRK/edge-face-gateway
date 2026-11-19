@@ -48,18 +48,26 @@ def crop_face(image: np.ndarray, face: MappedFace, padding_ratio: float = 0.25) 
     return crop.copy() if crop.size else None
 
 
-def annotate_faces(image: np.ndarray, faces: list[MappedFace], camera_id: str, quality_results: list[Any] | None = None) -> np.ndarray:
+def annotate_faces(image: np.ndarray, faces: list[MappedFace], camera_id: str, quality_results: list[Any] | None = None,
+                   min_face_score: float | None = None) -> np.ndarray:
     annotated = image.copy()
     h, w = annotated.shape[:2]
     thickness = max(2, round(w / 1280))
     font_scale = max(0.6, w / 1920)
     for index, face in enumerate(faces):
         quality = quality_results[index] if quality_results and index < len(quality_results) else None
-        accepted = quality is None or quality.accepted
+        accepted = (quality is None or quality.accepted) and (
+            min_face_score is None or face.score >= min_face_score
+        )
         color = (40, 220, 40) if accepted else (30, 30, 235)
         label = f"face {face.score:.2f}"
         if quality is not None:
-            label += f" Q:{quality.score:.0f}" if accepted else f" REJECT:{quality.reasons[0]}"
+            if accepted:
+                label += f" Q:{quality.score:.0f}"
+            elif min_face_score is not None and face.score < min_face_score:
+                label += " REJECT:score_too_low"
+            else:
+                label += f" REJECT:{quality.reasons[0]}"
         cv2.rectangle(annotated, (face.x1, face.y1), (face.x2, face.y2), color, thickness)
         cv2.putText(annotated, label, (face.x1, max(24, face.y1 - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)

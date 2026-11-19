@@ -7,15 +7,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import psutil
 import cv2
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 import re
 import threading
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
 from .engine import RuntimeEngine
 from sqlalchemy import select, desc
@@ -29,6 +29,16 @@ from core.infrastructure.database.models import (
 )
 from core.infrastructure.database.pagination import Page, paginate
 from .config import CameraConfig
+from core.infrastructure.auth import (
+    AuthenticationError,
+    AuthService,
+    DuplicateUsernameError,
+    LastActiveUserError,
+    PASSWORD_MIN_LENGTH,
+    SESSION_COOKIE,
+    SESSION_TTL_MS,
+    UserNotFoundError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -64,11 +74,11 @@ document.getElementById('s3-form').onsubmit=async e=>{e.preventDefault();try{awa
 document.getElementById('mqtt-test').onclick=async()=>{const o=document.getElementById('mqtt-result');o.textContent='正在连接 Broker 并发布测试消息…';try{const d=await api('/api/system-settings/test-mqtt',{method:'POST'});o.textContent=d.message;refreshMqttStatus()}catch(e){o.textContent=e.message}};document.getElementById('s3-test').onclick=async()=>{const o=document.getElementById('s3-result');o.textContent='测试中…';try{const d=await api('/api/system-settings/test-s3',{method:'POST'});o.textContent=d.message}catch(e){o.textContent=e.message}};async function refreshMqttStatus(){try{const s=await api('/api/system-settings/mqtt-status');document.getElementById('mqtt-status').textContent=`状态：${s.enabled?(s.connected?'已连接':'等待连接'):'未启用'} · Outbox 待发送 ${s.pending_events} 条 · Topic ${s.topic}`}catch(e){}}load();setInterval(refreshMqttStatus,5000);
 </script>'''
 
-LOGS_BODY = r'''<div class="toolbar"><label>事件类型 <select id="type"><option value="">全部事件</option><option>camera.online</option><option>camera.offline</option><option>capture.created</option><option>capture.saved</option><option>capture.missed</option><option>capture.failed</option><option>capture.detected</option><option>quality.face_rejected</option><option>quality.face_accepted</option><option>artifact.save_failed</option><option>artifact.saved</option><option>upload.complete</option><option>upload.error</option></select></label><label>摄像头 <select id="camera"><option value="">全部摄像头</option></select></label><button id="reload">刷新</button><span id="count" class="muted"></span></div><section class="card"><div id="events"></div></section><div class="toolbar"><button id="prev">上一页</button><button id="next">下一页</button></div>'''
+LOGS_BODY = r'''<div class="toolbar"><label>事件类型 <select id="type"><option value="">全部事件</option><option>camera.online</option><option>camera.offline</option><option>capture.created</option><option>capture.saved</option><option>capture.missed</option><option>capture.failed</option><option>capture.detected</option><option>capture.score_rejected</option><option>quality.face_rejected</option><option>quality.face_accepted</option><option>artifact.save_failed</option><option>artifact.saved</option><option>upload.complete</option><option>upload.error</option></select></label><label>摄像头 <select id="camera"><option value="">全部摄像头</option></select></label><button id="reload">刷新</button><span id="count" class="muted"></span></div><section class="card"><div id="events"></div></section><div class="toolbar"><button id="prev">上一页</button><button id="next">下一页</button></div>'''
 LOGS_SCRIPT = r"""<script>
 const typeFilter=document.getElementById('type'),cameraFilter=document.getElementById('camera'),eventList=document.getElementById('events'),countLabel=document.getElementById('count');let page=1,totalPages=0;
 function formatEventTime(value){if(value===null||value===undefined||value==='')return '—';const date=new Date(value);return Number.isNaN(date.getTime())?'—':date.toLocaleString()}
-async function loadEvents(reset=false){if(reset)page=1;const q=new URLSearchParams({page,page_size:50});if(typeFilter.value)q.set('event_type',typeFilter.value);if(cameraFilter.value)q.set('camera_id',cameraFilter.value);const d=await(await fetch('/api/events?'+q)).json();const selected=cameraFilter.value;cameraFilter.innerHTML='<option value="">全部摄像头</option>';for(const c of d.cameras)cameraFilter.add(new Option(c,c));cameraFilter.value=selected;totalPages=d.pagination.total_pages;countLabel.textContent=`共 ${d.total} 条 · 第 ${page}/${totalPages||0} 页`;eventList.innerHTML='';for(const e of d.items){const row=document.createElement('div');row.className='event';const times=document.createElement('div');times.className='meta';const created=document.createElement('small');created.textContent='创建时间：'+formatEventTime(e.created_at_ms);const pushed=document.createElement('small');pushed.textContent='推送时间：'+(e.published_at_ms?formatEventTime(e.published_at_ms):(e.push_status==='pending'?'待推送':(e.push_status==='not_queued'?'未入队':'—')));times.append(created,document.createElement('br'),pushed);const typ=document.createElement('div');const name=document.createElement('b');name.textContent=e.event_type||'—';const status=document.createElement('span');status.className='pill';status.textContent=e.status||'—';typ.append(name,document.createElement('br'),status);const detail=document.createElement('div');detail.className='meta';detail.textContent=[e.camera_id,e.artifact,e.path,e.face_count!==undefined?'faces '+e.face_count:'',e.accepted_face_count!==undefined?'accepted '+e.accepted_face_count:'',e.rejected_face_count!==undefined?'rejected '+e.rejected_face_count:'',e.reasons?e.reasons.join(', '):'',e.error].filter(Boolean).join(' · ');row.append(times,typ,detail);eventList.append(row)}if(!d.items.length)eventList.innerHTML='<div class="empty">暂无该类型事件。</div>';document.getElementById('prev').disabled=page<=1;document.getElementById('next').disabled=page>=totalPages}
+async function loadEvents(reset=false){if(reset)page=1;const q=new URLSearchParams({page,page_size:50});if(typeFilter.value)q.set('event_type',typeFilter.value);if(cameraFilter.value)q.set('camera_id',cameraFilter.value);const d=await(await fetch('/api/events?'+q)).json();const selected=cameraFilter.value;cameraFilter.innerHTML='<option value="">全部摄像头</option>';for(const c of d.cameras)cameraFilter.add(new Option(c,c));cameraFilter.value=selected;totalPages=d.pagination.total_pages;countLabel.textContent=`共 ${d.total} 条 · 第 ${page}/${totalPages||0} 页`;eventList.innerHTML='';for(const e of d.items){const row=document.createElement('div');row.className='event';const times=document.createElement('div');times.className='meta';const created=document.createElement('small');created.textContent='创建时间：'+formatEventTime(e.created_at_ms);const pushed=document.createElement('small');pushed.textContent='推送时间：'+(e.published_at_ms?formatEventTime(e.published_at_ms):(e.push_status==='pending'?'待推送':(e.push_status==='not_queued'?'未入队':'—')));times.append(created,document.createElement('br'),pushed);const typ=document.createElement('div');const name=document.createElement('b');name.textContent=e.event_type||'—';const status=document.createElement('span');status.className='pill';status.textContent=e.status||'—';typ.append(name,document.createElement('br'),status);const detail=document.createElement('div');detail.className='meta';detail.textContent=[e.camera_id,e.artifact,e.path,e.face_count!==undefined?'faces '+e.face_count:'',e.min_capture_score!==undefined?'min score '+e.min_capture_score:'',e.rejected_faces?e.rejected_faces.map(f=>'face '+f.face_index+': '+f.confidence).join(', '):'',e.accepted_face_count!==undefined?'accepted '+e.accepted_face_count:'',e.rejected_face_count!==undefined?'rejected '+e.rejected_face_count:'',e.reasons?e.reasons.join(', '):'',e.error].filter(Boolean).join(' · ');row.append(times,typ,detail);eventList.append(row)}if(!d.items.length)eventList.innerHTML='<div class="empty">暂无该类型事件。</div>';document.getElementById('prev').disabled=page<=1;document.getElementById('next').disabled=page>=totalPages}
 document.getElementById('reload').onclick=()=>loadEvents(true);typeFilter.onchange=()=>loadEvents(true);cameraFilter.onchange=()=>loadEvents(true);document.getElementById('prev').onclick=()=>{if(page>1){page--;loadEvents()}};document.getElementById('next').onclick=()=>{if(page<totalPages){page++;loadEvents()}};loadEvents();
 </script>"""
 
@@ -78,10 +88,49 @@ let page=1,totalPages=0;const list=document.getElementById('logs');async functio
 document.getElementById('reload').onclick=()=>load(true);document.getElementById('level').onchange=()=>load(true);document.getElementById('category').onchange=()=>load(true);document.getElementById('prev').onclick=()=>{if(page>1){page--;load()}};document.getElementById('next').onclick=()=>{if(page<totalPages){page++;load()}};load();
 </script>"""
 
+LOGIN_TEMPLATE = r"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>系统登录 · Edge Face Gateway</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0c1119;color:#e8eef7;font:14px system-ui,Segoe UI,sans-serif}.login-card{width:min(440px,calc(100% - 32px));padding:28px;background:#151e2b;border:1px solid #29384a;border-radius:12px}h1{font-size:20px;margin:0 0 22px}label{display:block;margin:16px 0 6px}input{width:100%;margin-top:6px;padding:10px 12px;background:#172333;color:#e8eef7;border:1px solid #29384a;border-radius:8px}button{width:100%;margin-top:18px;padding:10px;background:#223247;color:#fff;border:1px solid #29384a;border-radius:8px;cursor:pointer}.error{min-height:1.5em;margin-top:12px;color:#ff9b9b}
+</style>
+</head>
+<body>
+<main>__BODY__</main>
+__SCRIPT__
+</body>
+</html>"""
+LOGIN_BODY = r'''<section class="login-card"><h1>Edge Face Gateway</h1><h2>系统登录</h2><form id="login-form"><label>用户名<input id="username" autocomplete="username" required maxlength="128"></label><label>密码<input id="password" type="password" autocomplete="current-password" required></label><button type="submit">登录</button><div id="login-error" class="error"></div></form></section>'''
+LOGIN_SCRIPT = r"""<script>
+document.getElementById('login-form').onsubmit=async event=>{event.preventDefault();const error=document.getElementById('login-error');error.textContent='';try{const response=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:document.getElementById('username').value,password:document.getElementById('password').value})});const data=await response.json();if(!response.ok)throw Error(data.detail||'登录失败');location.replace(data.must_change_password?'/change-password':'/')}catch(e){error.textContent=e.message}};
+</script>"""
+CHANGE_PASSWORD_BODY = r'''<section class="card" style="max-width:520px;margin:40px auto"><h2 class="section-title">修改初始密码</h2><p class="meta">首次登录必须修改初始密码。新密码至少 6 个字符。</p><form id="password-form"><p><label>当前密码<br><input id="current-password" type="password" autocomplete="current-password" required style="width:100%"></label></p><p><label>新密码<br><input id="new-password" type="password" autocomplete="new-password" minlength="6" maxlength="256" required style="width:100%"></label></p><p><label>确认新密码<br><input id="confirm-password" type="password" autocomplete="new-password" minlength="6" maxlength="256" required style="width:100%"></label></p><button type="submit">保存新密码</button><div id="password-error" class="meta"></div></form></section>'''
+CHANGE_PASSWORD_SCRIPT = r"""<script>
+document.getElementById('password-form').onsubmit=async event=>{event.preventDefault();const error=document.getElementById('password-error'),password=document.getElementById('new-password').value;if(password!==document.getElementById('confirm-password').value){error.textContent='两次输入的新密码不一致';return}try{const response=await fetch('/api/auth/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:document.getElementById('current-password').value,new_password:password})});const data=await response.json();if(!response.ok)throw Error(data.detail||'修改密码失败');location.replace('/')}catch(e){error.textContent=e.message}};
+</script>"""
+USERS_BODY = r'''<section class="card"><h2 class="section-title">添加系统用户</h2><form id="create-user"><div class="toolbar"><label>用户名 <input id="new-username" required maxlength="128" pattern="[A-Za-z0-9_.-]+"></label><label>初始密码 <input id="new-password" type="password" autocomplete="new-password" minlength="6" maxlength="256" required></label><button type="submit">添加</button></div><div class="meta">所有系统用户均拥有管理员权限；新用户首次登录时必须修改初始密码。</div></form></section><h2 class="section-title">系统用户</h2><div id="users" class="grid"></div><div id="users-message" class="meta"></div><dialog id="user-editor" style="background:#151e2b;color:#e8eef7;border:1px solid #29384a;border-radius:12px;max-width:520px;width:95%;padding:22px"><form id="user-form"><h2>编辑系统用户</h2><label>用户名<br><input id="edit-username" required maxlength="128" pattern="[A-Za-z0-9_.-]+" style="width:100%"></label><p><label><input id="edit-active" type="checkbox"> 启用账号</label></p><label>重置密码（留空不修改）<br><input id="edit-password" type="password" autocomplete="new-password" minlength="6" maxlength="256" style="width:100%"></label><p class="meta">重置密码后，该用户下次登录必须修改密码。</p><div class="toolbar"><button type="submit">保存</button><button type="button" id="cancel-edit">取消</button></div></form></dialog>'''
+USERS_SCRIPT = r"""<script>
+const usersList=document.getElementById('users'),usersMessage=document.getElementById('users-message'),userEditor=document.getElementById('user-editor'),userForm=document.getElementById('user-form');let editingUser=null;
+async function usersApi(url,options={}){const response=await fetch(url,{headers:{'Content-Type':'application/json'},...options}),data=await response.json().catch(()=>({}));if(!response.ok)throw Error(data.detail||'请求失败');return data}
+function setMessage(message){usersMessage.textContent=message||''}
+async function loadUsers(){try{const data=await usersApi('/api/users');usersList.innerHTML='';for(const user of data.items){const card=document.createElement('section');card.className='card';const title=document.createElement('h3');title.textContent=user.username;const state=document.createElement('div');state.className='meta';state.textContent=(user.is_active?'已启用':'已停用')+(user.must_change_password?' · 下次登录需修改密码':'')+' · 创建于 '+new Date(user.created_at_ms).toLocaleString();const actions=document.createElement('div');actions.className='toolbar';const edit=document.createElement('button');edit.textContent='编辑/重置密码';edit.onclick=()=>editUser(user);const remove=document.createElement('button');remove.textContent='删除';remove.onclick=()=>deleteUser(user);actions.append(edit,remove);card.append(title,state,actions);usersList.append(card)}}catch(e){setMessage(e.message)}}
+document.getElementById('create-user').onsubmit=async event=>{event.preventDefault();try{await usersApi('/api/users',{method:'POST',body:JSON.stringify({username:document.getElementById('new-username').value.trim(),password:document.getElementById('new-password').value})});event.target.reset();setMessage('用户已创建');loadUsers()}catch(e){setMessage(e.message)}};
+function editUser(user){editingUser=user;document.getElementById('edit-username').value=user.username;document.getElementById('edit-active').checked=user.is_active;document.getElementById('edit-password').value='';userEditor.showModal()}
+userForm.onsubmit=async event=>{event.preventDefault();try{await usersApi('/api/users/'+editingUser.id,{method:'PUT',body:JSON.stringify({username:document.getElementById('edit-username').value.trim(),is_active:document.getElementById('edit-active').checked,password:document.getElementById('edit-password').value||null})});userEditor.close();setMessage('用户已更新');loadUsers()}catch(e){setMessage(e.message)}};
+async function deleteUser(user){if(!confirm('确定删除用户 '+user.username+'？'))return;try{await usersApi('/api/users/'+user.id,{method:'DELETE'});setMessage('用户已删除');loadUsers()}catch(e){setMessage(e.message)}}
+document.getElementById('cancel-edit').onclick=()=>userEditor.close();loadUsers();
+</script>"""
 
 
 def _page(body: str, script: str, page: str) -> str:
-    return SHELL.replace("__BODY__", body).replace("__SCRIPT__", script).replace("__PAGE__", page)
+    html = SHELL.replace("__BODY__", body).replace("__PAGE__", page)
+    controls = '<a href="/users" data-page="users">系统用户</a><button id="logout" type="button">退出登录</button>'
+    html = html.replace("</nav>", controls + "</nav>")
+    script += r"""<script>document.getElementById('logout').onclick=async()=>{try{await fetch('/api/auth/logout',{method:'POST'})}finally{location.replace('/login')}};</script>"""
+    return html.replace("__SCRIPT__", script)
 
 
 class SystemMetricsSampler:
@@ -161,12 +210,169 @@ class CameraRevision(BaseModel):
 class CameraEnabled(CameraRevision):
     enabled: bool
 
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=256)
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=256)
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=256)
+
+class UserUpdate(BaseModel):
+    username: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
+    is_active: bool
+    password: str | None = Field(default=None, min_length=PASSWORD_MIN_LENGTH, max_length=256)
+
+
 def create_app(engine: RuntimeEngine) -> FastAPI:
     app = FastAPI(title="Edge Face Gateway", version="0.4.2")
     process = psutil.Process(os.getpid())
     logical_cpus = max(1, psutil.cpu_count(logical=True) or 1)
     sampler = SystemMetricsSampler(process, logical_cpus)
     app.add_event_handler("shutdown", sampler.stop)
+    database = getattr(engine, "database", None)
+    auth_service = AuthService(database) if database is not None else None
+    if auth_service is not None:
+        auth_service.ensure_initial_admin()
+    app.state.auth_service = auth_service
+
+    @app.middleware("http")
+    async def require_authentication(request: Request, call_next):
+        path = request.url.path
+        if path in {"/login", "/api/auth/login"}:
+            return await call_next(request)
+        if auth_service is None:
+            return JSONResponse({"detail": "authentication database unavailable"}, status_code=503)
+        user = auth_service.user_for_session(request.cookies.get(SESSION_COOKIE))
+        if user is None:
+            if path.startswith(("/api/", "/media/", "/stream/")):
+                return JSONResponse({"detail": "authentication required"}, status_code=401)
+            return RedirectResponse("/login", status_code=303)
+        request.state.user = user
+        if user.must_change_password and path not in {
+            "/change-password", "/api/auth/change-password", "/api/auth/logout",
+        }:
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "password change required"}, status_code=428)
+            return RedirectResponse("/change-password", status_code=303)
+        origin = request.headers.get("origin")
+        if origin and request.method not in {"GET", "HEAD", "OPTIONS"}:
+            origin_url = urlsplit(origin)
+            if (origin_url.scheme.lower() != request.url.scheme.lower()
+                    or origin_url.netloc.lower() != request.url.netloc.lower()):
+                return JSONResponse({"detail": "invalid request origin"}, status_code=403)
+        return await call_next(request)
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(request: Request):
+        if auth_service is not None:
+            user = auth_service.user_for_session(request.cookies.get(SESSION_COOKIE))
+            if user is not None:
+                target = "/change-password" if user.must_change_password else "/"
+                return RedirectResponse(target, status_code=303)
+        return LOGIN_TEMPLATE.replace("__BODY__", LOGIN_BODY).replace("__SCRIPT__", LOGIN_SCRIPT)
+
+    @app.get("/change-password", response_class=HTMLResponse)
+    def change_password_page():
+        return _page(CHANGE_PASSWORD_BODY, CHANGE_PASSWORD_SCRIPT, "")
+
+    @app.post("/api/auth/login")
+    def login(body: LoginRequest, request: Request):
+        if auth_service is None:
+            raise HTTPException(503, "authentication database unavailable")
+        user = auth_service.authenticate(body.username.strip(), body.password)
+        if user is None:
+            raise HTTPException(401, "用户名或密码错误")
+        try:
+            token = auth_service.create_session(user.id)
+        except UserNotFoundError as exc:
+            raise HTTPException(401, "用户名或密码错误") from exc
+        response = JSONResponse({
+            "username": user.username,
+            "must_change_password": user.must_change_password,
+        })
+        response.set_cookie(
+            SESSION_COOKIE, token, max_age=SESSION_TTL_MS // 1000, httponly=True,
+            secure=request.url.scheme == "https", samesite="lax", path="/",
+        )
+        return response
+
+    @app.post("/api/auth/logout")
+    def logout(request: Request):
+        if auth_service is not None:
+            auth_service.revoke_session(request.cookies.get(SESSION_COOKIE))
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="lax")
+        return response
+
+    @app.post("/api/auth/change-password")
+    def change_password(body: PasswordChange, request: Request):
+        if auth_service is None:
+            raise HTTPException(503, "authentication database unavailable")
+        if body.current_password == body.new_password:
+            raise HTTPException(422, "新密码必须与当前密码不同")
+        try:
+            token = auth_service.change_password(
+                request.state.user.id, body.current_password, body.new_password,
+            )
+        except AuthenticationError as exc:
+            raise HTTPException(401, "当前密码错误") from exc
+        except UserNotFoundError as exc:
+            raise HTTPException(401, "账号不可用") from exc
+        response = JSONResponse({"ok": True})
+        response.set_cookie(
+            SESSION_COOKIE, token, max_age=SESSION_TTL_MS // 1000, httponly=True,
+            secure=request.url.scheme == "https", samesite="lax", path="/",
+        )
+        return response
+
+    @app.get("/users", response_class=HTMLResponse)
+    def users_page():
+        return _page(USERS_BODY, USERS_SCRIPT, "users")
+
+    @app.get("/api/users")
+    def list_users():
+        if auth_service is None:
+            raise HTTPException(503, "authentication database unavailable")
+        return {"items": auth_service.list_users()}
+
+    @app.post("/api/users", status_code=201)
+    def create_user(body: UserCreate):
+        if auth_service is None:
+            raise HTTPException(503, "authentication database unavailable")
+        try:
+            return auth_service.create_user(body.username, body.password)
+        except DuplicateUsernameError as exc:
+            raise HTTPException(409, "用户名已存在") from exc
+
+    @app.put("/api/users/{user_id}")
+    def update_user(user_id: int, body: UserUpdate):
+        if auth_service is None:
+            raise HTTPException(503, "authentication database unavailable")
+        try:
+            return auth_service.update_user(user_id, body.username, body.is_active, body.password)
+        except UserNotFoundError as exc:
+            raise HTTPException(404, "用户不存在") from exc
+        except DuplicateUsernameError as exc:
+            raise HTTPException(409, "用户名已存在") from exc
+        except LastActiveUserError as exc:
+            raise HTTPException(409, "不能停用最后一个有效用户") from exc
+
+    @app.delete("/api/users/{user_id}")
+    def delete_user(user_id: int):
+        if auth_service is None:
+            raise HTTPException(503, "authentication database unavailable")
+        try:
+            auth_service.delete_user(user_id)
+        except UserNotFoundError as exc:
+            raise HTTPException(404, "用户不存在") from exc
+        except LastActiveUserError as exc:
+            raise HTTPException(409, "不能删除最后一个有效用户") from exc
+        return {"ok": True}
 
     @app.get("/", response_class=HTMLResponse)
     def index():

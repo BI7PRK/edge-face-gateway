@@ -35,16 +35,13 @@ def main() -> None:
     log = logging.getLogger(__name__)
     cipher = SecretCipher(os.getenv("FACE_SECRET_PATH", str(data_dir / "secrets" / "camera.key")))
     camera_repository = CameraRepository(cipher)
-    # Backward-compatible one-time import from v0.1.x YAML. Thereafter SQLite is authoritative.
-    with database.sessions.begin() as session:
-        imported = camera_repository.seed_from_legacy_config(session, config)
     image_repository = ImageRepository(database, Path(os.getenv("FACE_OUTPUT_DIR") or config.get("capture", {}).get("output_dir", "/app/data")))
     legacy_images = image_repository.import_legacy_files()
     legacy_events = SQLiteEventLogger(database).import_legacy_jsonl(os.getenv("FACE_LEGACY_EVENTS", "/app/logs/runtime.jsonl"))
     with database.sessions() as session:
         cameras = camera_repository.list_enabled(session)
-    log.info("database initialized path=%s imported_cameras=%s legacy_images=%s legacy_events=%s active_cameras=%s",
-             database_path, imported, legacy_images, legacy_events, len(cameras))
+    log.info("database initialized path=%s legacy_images=%s legacy_events=%s active_cameras=%s",
+             database_path, legacy_images, legacy_events, len(cameras))
     cloud_services = CloudServices(database, cipher, image_repository.root)
     engine = RuntimeEngine(cameras, config, database=database, camera_repository=camera_repository, cloud_services=cloud_services)
     engine.start()

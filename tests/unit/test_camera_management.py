@@ -39,12 +39,13 @@ class FakeEngine:
         return {"ok": True, "width": 1920, "height": 1080, "elapsed_ms": 10.0}
 
 
-def test_camera_crud_masks_rtsp_credentials_and_enforces_revision(tmp_path: Path):
+def test_camera_crud_masks_rtsp_credentials_and_enforces_revision(tmp_path: Path, authenticate_client):
     db = Database(tmp_path / "gateway.db")
     db.create_schema()
     repo = CameraRepository(SecretCipher(tmp_path / "secret.key"))
     engine = FakeEngine(db, repo)
     client = TestClient(create_app(engine))
+    authenticate_client(client)
 
     created = client.post("/api/cameras", json={
         "id": "gate-01", "name": "Gate", "main_url": "rtsp://admin:super-secret@10.0.0.2/main",
@@ -81,21 +82,23 @@ def test_camera_crud_masks_rtsp_credentials_and_enforces_revision(tmp_path: Path
     db.close()
 
 
-def test_camera_create_rejects_non_rtsp_url(tmp_path: Path):
+def test_camera_create_rejects_non_rtsp_url(tmp_path: Path, authenticate_client):
     db = Database(tmp_path / "gateway.db")
     db.create_schema()
     repo = CameraRepository(SecretCipher(tmp_path / "secret.key"))
     client = TestClient(create_app(FakeEngine(db, repo)))
+    authenticate_client(client)
     response = client.post("/api/cameras", json={"id": "x", "name": "x", "main_url": "http://example.com"})
     assert response.status_code == 422
     db.close()
 
 
-def test_camera_update_can_switch_dual_stream_to_single_stream(tmp_path: Path):
+def test_camera_update_can_switch_dual_stream_to_single_stream(tmp_path: Path, authenticate_client):
     db = Database(tmp_path / "gateway.db")
     db.create_schema()
     repo = CameraRepository(SecretCipher(tmp_path / "secret.key"))
     client = TestClient(create_app(FakeEngine(db, repo)))
+    authenticate_client(client)
     assert client.post("/api/cameras", json={
         "id": "dual", "name": "Dual", "main_url": "rtsp://cam/main", "sub_url": "rtsp://cam/sub",
     }).status_code == 201

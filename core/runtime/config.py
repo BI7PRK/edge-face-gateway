@@ -38,26 +38,3 @@ class CameraConfig:
 def load_config(path: str) -> dict[str, Any]:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     return _expand_env(raw)
-
-
-def parse_cameras(config: dict[str, Any]) -> list[CameraConfig]:
-    cameras: list[CameraConfig] = []
-    for item in config.get("cameras", []):
-        if not item.get("enabled", True):
-            continue
-        streams = item.get("streams") or {}
-        main = streams.get("main") or {}
-        sub = streams.get("sub") or {}
-        main_url = str(main.get("url") or "").strip() if main.get("enabled", True) else ""
-        sub_url = str(sub.get("url") or "").strip() if sub.get("enabled", False) else ""
-        # A configured substream without a main stream is not a valid capture setup.
-        if not main_url:
-            continue
-        cameras.append(CameraConfig(
-            camera_id=str(item["id"]), name=str(item.get("name") or item["id"]),
-            main_url=main_url, sub_url=sub_url or None, detection_fps=int(item.get("detection_fps", 3)),
-        ))
-    ids = [c.camera_id for c in cameras]
-    if len(ids) != len(set(ids)):
-        raise ValueError("Camera IDs must be unique")
-    return cameras

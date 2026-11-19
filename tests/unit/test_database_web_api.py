@@ -12,7 +12,7 @@ from core.infrastructure.database.models import ApplicationLog, BusinessEvent, C
 from core.runtime.web import create_app
 
 
-def test_database_backed_capture_event_and_log_apis_are_paginated(tmp_path: Path):
+def test_database_backed_capture_event_and_log_apis_are_paginated(tmp_path: Path, authenticate_client):
     db = Database(tmp_path / "gateway.db")
     db.create_schema()
     image_dir = tmp_path / "cam-01"
@@ -30,6 +30,7 @@ def test_database_backed_capture_event_and_log_apis_are_paginated(tmp_path: Path
     engine = SimpleNamespace(output_dir=tmp_path, host_started_mono=0.0, runtimes=[],
         stop_event=threading.Event(), event_log=SimpleNamespace(path=None), database=db)
     client = TestClient(create_app(engine))
+    authenticate_client(client)
     captures = client.get("/api/captures?page=1&page_size=1").json()
     assert captures["total"] == 1 and len(captures["items"]) == 1
     assert captures["items"][0]["kind"] == "frame"
@@ -41,7 +42,7 @@ def test_database_backed_capture_event_and_log_apis_are_paginated(tmp_path: Path
     db.close()
 
 
-def test_event_api_exposes_creation_and_mqtt_publish_times(tmp_path: Path):
+def test_event_api_exposes_creation_and_mqtt_publish_times(tmp_path: Path, authenticate_client):
     db = Database(tmp_path / "gateway.db")
     db.create_schema()
     with db.sessions.begin() as session:
@@ -57,7 +58,8 @@ def test_event_api_exposes_creation_and_mqtt_publish_times(tmp_path: Path):
         ))
     engine = SimpleNamespace(output_dir=tmp_path, host_started_mono=0.0, runtimes=[],
         stop_event=threading.Event(), event_log=SimpleNamespace(path=None), database=db)
-    item = TestClient(create_app(engine)).get("/api/events").json()["items"][0]
+    client = authenticate_client(TestClient(create_app(engine)))
+    item = client.get("/api/events").json()["items"][0]
     assert item["created_at_ms"] == 123456
     assert item["published_at_ms"] == 234567
     assert item["push_status"] == "published"

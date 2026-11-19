@@ -109,3 +109,25 @@ class MqttOutboxEvent(Base):
     created_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     published_at_ms: Mapped[int | None] = mapped_column(Integer)
     __table_args__ = (Index("ix_mqtt_outbox_due", "status", "next_attempt_at_ms", "created_at_ms"),)
+
+
+class SystemUser(Base):
+    __tablename__ = "system_users"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    __table_args__ = (Index("ix_system_users_active", "is_active", "username"),)
+
+
+class WebSession(Base):
+    __tablename__ = "web_sessions"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("system_users.id", ondelete="CASCADE"), nullable=False)
+    created_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    __table_args__ = (Index("ix_web_sessions_user", "user_id"),
+                      Index("ix_web_sessions_expiry", "expires_at_ms"))

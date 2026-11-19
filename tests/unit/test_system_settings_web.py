@@ -10,7 +10,7 @@ from core.infrastructure.services.cloud_services import CloudServices
 from core.runtime.web import create_app
 
 
-def test_system_settings_page_and_api_mask_secrets(tmp_path: Path):
+def test_system_settings_page_and_api_mask_secrets(tmp_path: Path, authenticate_client):
     db = Database(tmp_path / "gateway.db")
     db.migrate()
     cloud = CloudServices(db, SecretCipher(tmp_path / "camera.key"), tmp_path)
@@ -18,6 +18,7 @@ def test_system_settings_page_and_api_mask_secrets(tmp_path: Path):
         stop_event=threading.Event(), event_log=SimpleNamespace(path=None), database=db,
         cloud_services=cloud)
     client = TestClient(create_app(engine))
+    authenticate_client(client)
     page = client.get("/settings").text
     assert "MQTT 消息服务" in page
     assert "RabbitMQ" not in page
@@ -44,7 +45,7 @@ def test_system_settings_page_and_api_mask_secrets(tmp_path: Path):
     db.close()
 
 
-def test_mqtt_settings_validation_rejects_invalid_qos(tmp_path: Path):
+def test_mqtt_settings_validation_rejects_invalid_qos(tmp_path: Path, authenticate_client):
     db = Database(tmp_path / "gateway.db")
     db.migrate()
     cloud = CloudServices(db, SecretCipher(tmp_path / "camera.key"), tmp_path)
@@ -52,6 +53,7 @@ def test_mqtt_settings_validation_rejects_invalid_qos(tmp_path: Path):
         stop_event=threading.Event(), event_log=SimpleNamespace(path=None), database=db,
         cloud_services=cloud)
     client = TestClient(create_app(engine))
+    authenticate_client(client)
     response = client.put("/api/system-settings", json={"mqtt": {"enabled": True, "host": "mqtt", "qos": 3}})
     assert response.status_code == 422
     db.close()
