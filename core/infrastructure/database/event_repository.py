@@ -32,7 +32,7 @@ def _timestamp_ms(payload: dict) -> int:
 
 
 def _event_type(payload: dict) -> str:
-    return str(payload.get("event_type") or payload.get("event") or "RuntimeEvent")[:40]
+    return str(payload.get("event_type") or "runtime.unknown")[:40]
 
 
 class SQLiteEventLogger:

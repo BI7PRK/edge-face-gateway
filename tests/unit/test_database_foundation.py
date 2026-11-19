@@ -105,7 +105,7 @@ def test_legacy_image_and_jsonl_events_are_imported_once(tmp_path: Path):
     assert images.import_legacy_files() == 3
     assert images.import_legacy_files() == 0
     legacy = tmp_path / "runtime.jsonl"
-    legacy.write_text(json.dumps({"event_type": "CaptureEvent", "ts": "2026-11-18T10:00:00Z", "camera_id": "camera-01"}) + "\n", encoding="utf-8")
+    legacy.write_text(json.dumps({"event_type": "capture.detected", "ts": "2026-11-18T10:00:00Z", "camera_id": "camera-01"}) + "\n", encoding="utf-8")
     events = SQLiteEventLogger(db)
     assert events.import_legacy_jsonl(str(legacy)) == 1
     assert events.import_legacy_jsonl(str(legacy)) == 0

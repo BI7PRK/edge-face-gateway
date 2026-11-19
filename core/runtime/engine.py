@@ -256,8 +256,8 @@ class RuntimeEngine:
         source = runtime.capture_source(detection_frame)
         if source is None or source.image is None:
             runtime.metrics.increment("capture_misses")
-            self.event_log.write({"event_type": "CaptureEvent", "ts": datetime.now(timezone.utc).isoformat(),
-                                  "camera_id": runtime.cfg.camera_id, "event": "capture_miss", "status": "failed",
+            self.event_log.write({"event_type": "capture.missed", "ts": datetime.now(timezone.utc).isoformat(),
+                                  "camera_id": runtime.cfg.camera_id, "status": "failed",
                                   "reason": "no_main_frame_within_timestamp_tolerance"})
             return
         runtime.last_capture_mono = now
@@ -281,10 +281,10 @@ class RuntimeEngine:
             saved_files.append({"kind": "frame", "path": original_path, "width": source.image.shape[1],
                                 "height": source.image.shape[0], "quality": quality})
         else:
-            self.event_log.write({"event_type": "SaveEvent", "status": "failed", "capture_id": capture_id,
+            self.event_log.write({"event_type": "artifact.save_failed", "status": "failed", "capture_id": capture_id,
                                   "camera_id": runtime.cfg.camera_id, "artifact": "frame", "path": str(original_path),
                                   "error": "jpeg_write_failed", "ts": datetime.now(timezone.utc).isoformat()})
-            self.event_log.write({"event_type": "CaptureEvent", "event": "capture_failed", "status": "failed",
+            self.event_log.write({"event_type": "capture.failed", "status": "failed",
                                   "capture_id": capture_id, "camera_id": runtime.cfg.camera_id,
                                   "ts": datetime.now(timezone.utc).isoformat(), "reason": "frame_save_failed"})
             runtime.metrics.increment("capture_misses")
@@ -303,7 +303,7 @@ class RuntimeEngine:
             saved_files.append({"kind": "annotated", "path": annotated_path, "width": source.image.shape[1],
                                 "height": source.image.shape[0], "quality": quality})
         else:
-            self.event_log.write({"event_type": "SaveEvent", "event": "artifact_save_failed", "status": "failed",
+            self.event_log.write({"event_type": "artifact.save_failed", "status": "failed",
                                   "capture_id": capture_id, "camera_id": runtime.cfg.camera_id,
                                   "artifact": "annotated", "path": str(annotated_path),
                                   "ts": datetime.now(timezone.utc).isoformat(), "error": "jpeg_write_failed"})
@@ -318,7 +318,7 @@ class RuntimeEngine:
             if not quality_result.accepted:
                 rejected_count += 1
                 face_records.append(record)
-                self.event_log.write({"event_type": "QualityEvent", "event": "face_rejected",
+                self.event_log.write({"event_type": "quality.face_rejected",
                                       "status": "rejected", "capture_id": capture_id,
                                       "camera_id": runtime.cfg.camera_id, "face_index": index,
                                       "score": quality_result.score, "reasons": list(quality_result.reasons),
@@ -340,7 +340,7 @@ class RuntimeEngine:
                                     "height": crop.shape[0], "quality": face_quality,
                                     "confidence": float(face.score), "quality_score": float(quality_result.score)})
                 record.update({"image": str(crop_path), "width": crop.shape[1], "height": crop.shape[0]})
-                self.event_log.write({"event_type": "QualityEvent", "event": "face_accepted",
+                self.event_log.write({"event_type": "quality.face_accepted",
                                       "status": "accepted", "capture_id": capture_id,
                                       "camera_id": runtime.cfg.camera_id, "face_index": index,
                                       "score": quality_result.score, "metrics": quality_result.to_dict(),
@@ -349,7 +349,7 @@ class RuntimeEngine:
                 rejected_count += 1
                 record["accepted"] = False
                 record["quality"]["reasons"] = ["jpeg_write_failed"]
-                self.event_log.write({"event_type": "SaveEvent", "event": "artifact_save_failed", "status": "failed",
+                self.event_log.write({"event_type": "artifact.save_failed", "status": "failed",
                                       "capture_id": capture_id, "camera_id": runtime.cfg.camera_id,
                                       "artifact": "face", "path": str(crop_path),
                                       "ts": datetime.now(timezone.utc).isoformat(), "error": "jpeg_write_failed"})
@@ -388,7 +388,7 @@ class RuntimeEngine:
                     for registered in registered_images:
                         self.cloud_services.enqueue_image(registered["image_id"])
 
-        self.event_log.write({"event_type": "CaptureEvent", "event": "capture_detected", "status": "completed",
+        self.event_log.write({"event_type": "capture.detected", "status": "completed",
                               "capture_id": capture_id, "ts": datetime.now(timezone.utc).isoformat(),
                               "camera_id": runtime.cfg.camera_id, "mode": runtime.mode,
                               "source_frame_ts": source.wall_ts, "face_count": len(faces),
@@ -397,13 +397,13 @@ class RuntimeEngine:
         runtime.metrics.increment("faces_quality_accepted", accepted_count)
         runtime.metrics.increment("faces_quality_rejected", rejected_count)
         for item in saved_files:
-            self.event_log.write({"event_type": "SaveEvent", "event": "artifact_saved", "status": "success",
+            self.event_log.write({"event_type": "artifact.saved", "status": "success",
                                   "capture_id": capture_id, "ts": datetime.now(timezone.utc).isoformat(),
                                   "camera_id": runtime.cfg.camera_id, "artifact": item["kind"],
                                   "path": str(item["path"]), "width": item["width"], "height": item["height"],
                                   "jpeg_quality": item["quality"]})
         runtime.metrics.increment("captures_saved")
-        self.event_log.write({"event_type": "CaptureManifest", "capture_id": capture_id,
+        self.event_log.write({"event_type": "capture.manifest", "capture_id": capture_id,
                               "ts": datetime.now(timezone.utc).isoformat(), "camera_id": runtime.cfg.camera_id,
                               "mode": runtime.mode, "frame": str(original_path), "annotated": str(annotated_path),
                               "faces": face_records, "accepted_face_count": accepted_count,

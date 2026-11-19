@@ -15,7 +15,7 @@ A detection is mapped from detector-frame coordinates to the selected source-fra
 - evaluates each face on its original-resolution face region before context padding;
 - saves only faces that pass the quality gates as `*_face_NNN_score_0.xxx.jpg`;
 - keeps the original and annotated full frames as diagnostic evidence, including rejected detections (rejected boxes are red);
-- records accepted/rejected counts, quality metrics and rejection reasons in `QualityEvent` / `CaptureManifest` records.
+- records accepted/rejected counts, quality metrics and rejection reasons in `quality.face_accepted`, `quality.face_rejected` and `capture.manifest` records.
 
 Face crops are **image crops only**. The gateway does not perform identity recognition, feature/embedding extraction, person matching, tracking or biometric template creation. These crops can be used as source images for a later, separately designed person-comparison workflow; their suitability depends on camera resolution, focus, motion blur, face size and capture alignment.
 
@@ -33,7 +33,7 @@ JPEG quality is a compression setting, not a guarantee of optical detail. A crop
 
 ### Generic quality assessment
 
-The gateway does not control shutter, gain, IR illumination or vendor-specific camera settings. It evaluates the received image using face pixel dimensions, Laplacian sharpness (a blur proxy), brightness, contrast and a simple noise estimate. Face size, sharpness and exposure are hard gates; a high score cannot override a failed hard gate. Rejected face crops are not added to the face-crop album, but full-frame and annotated diagnostic images remain available. `QualityEvent` records contain the measured values and rejection reasons.
+The gateway does not control shutter, gain, IR illumination or vendor-specific camera settings. It evaluates the received image using face pixel dimensions, Laplacian sharpness (a blur proxy), brightness, contrast and a simple noise estimate. Face size, sharpness and exposure are hard gates; a high score cannot override a failed hard gate. Rejected face crops are not added to the face-crop album, but full-frame and annotated diagnostic images remain available. `quality.face_accepted` and `quality.face_rejected` records contain the measured values and rejection reasons.
 
 Initial thresholds are deliberately generic starting points, not validated universal values. Calibrate `capture.quality_assessment` with representative day/night footage from each deployment. A single-frame sharpness metric cannot reliably distinguish motion blur from defocus, poor optics or compression; the current release flags low sharpness without claiming to identify its physical cause. Best-frame selection across time is deferred to v0.1.4.
 
@@ -53,12 +53,12 @@ Initial thresholds are deliberately generic starting points, not validated unive
 - Event log: `http://localhost:8080/logs`
 - Status JSON: `http://localhost:8080/api/status`
 - Capture API: `/api/captures?camera_id=camera-01&kind=face`
-- Event API: `/api/events?event_type=SaveEvent`
+- Event API: `/api/events?event_type=artifact.saved`
 - Live MJPEG: `/stream/{camera_id}`
 
 The album supports camera filtering, image-kind filtering (original frame, annotated frame, face crop), lazy image loading and pagination. Click **打开原图** to inspect the full JPEG.
 
-The event log supports internal diagnostic records and the six MQTT business event types (`camera.online`, `camera.offline`, `capture.created`, `capture.saved`, `upload.complete`, `upload.error`). S3 upload is available when configured; upload completion/failure events are emitted only for actual upload attempts.
+The event log supports internal diagnostic records and the six MQTT business event types (`camera.online`, `camera.offline`, `capture.created`, `capture.saved`, `upload.complete`, `upload.error`). Event types use the `type.action` naming convention. The page shows each event's creation time and, when published via MQTT, its publish time. S3 upload is available when configured; upload completion/failure events are emitted only for actual upload attempts.
 
 JPEG files remain under `data/{camera_id}/`; image metadata and business events are persisted in SQLite. Existing v0.1.3 JPEGs and `logs/runtime.jsonl` are indexed/imported once during the first v0.2.0 startup. The legacy `logs/` directory is mounted read-only only for this import.
 
@@ -116,7 +116,7 @@ v0.2.0 introduces SQLite-backed persistence while keeping the v0.1.3 detection a
 
 - JPEG files remain on the local filesystem under `data/{camera_id}/`.
 - Each saved original frame, annotated frame and accepted face crop is registered in `capture_images`; face crops reference their original frame where available.
-- Business events (`CaptureEvent`, `QualityEvent`, `SaveEvent`, `CaptureManifest`, etc.) are persisted in `business_events`.
+- Business events (for example, `capture.detected`, `quality.face_accepted`, `artifact.saved`, `capture.manifest`) are persisted in `business_events`.
 - Python application logs are written asynchronously in batches to `application_logs`. The writer reports persistence failures to stderr to avoid recursive logging.
 - `GET /api/captures`, `GET /api/events` and `GET /api/logs` support page/page_size pagination. The album retains its offset/limit compatibility.
 - Web pages: `/logs` for business events and `/system-logs` for application logs.

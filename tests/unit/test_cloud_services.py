@@ -78,7 +78,7 @@ def test_supported_event_is_atomically_added_to_mqtt_outbox(tmp_path: Path):
 def test_non_contract_events_are_not_sent_to_mqtt(tmp_path: Path):
     db, services = make_services(tmp_path)
     services.save({"mqtt": {"enabled": True}})
-    SQLiteEventLogger(db, publisher=services).write({"event_type": "QualityEvent", "event": "face_accepted"})
+    SQLiteEventLogger(db, publisher=services).write({"event_type": "quality.face_accepted"})
     with db.sessions() as session:
         assert session.query(BusinessEvent).count() == 1
         assert session.query(MqttOutboxEvent).count() == 0

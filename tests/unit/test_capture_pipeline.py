@@ -60,9 +60,9 @@ def test_capture_saves_high_resolution_frame_annotation_and_face_crop(tmp_path: 
     assert runtime.metrics.values["faces_quality_accepted"] == 1
     assert runtime.metrics.values["faces_quality_rejected"] == 0
     kinds = [r.get("event_type") for r in engine.event_log.rows]
-    assert "CaptureEvent" in kinds
-    assert "QualityEvent" in kinds
-    assert kinds.count("SaveEvent") == 3
+    assert "capture.detected" in kinds
+    assert "quality.face_accepted" in kinds
+    assert kinds.count("artifact.saved") == 3
 
 
 def test_rejected_face_is_not_saved_as_face_crop(tmp_path: Path):
@@ -85,7 +85,7 @@ def test_rejected_face_is_not_saved_as_face_crop(tmp_path: Path):
     files = list((tmp_path / "cam-02").glob("*.jpg"))
     assert len(files) == 2  # Diagnostic full frame + annotated frame only.
     assert not any("_face_" in p.name for p in files)
-    quality_events = [row for row in engine.event_log.rows if row.get("event_type") == "QualityEvent"]
+    quality_events = [row for row in engine.event_log.rows if row.get("event_type") == "quality.face_rejected"]
     assert len(quality_events) == 1
     assert quality_events[0]["status"] == "rejected"
     assert "underexposed" in quality_events[0]["reasons"]

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import quote
@@ -18,7 +19,14 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from .engine import RuntimeEngine
 from sqlalchemy import select, desc
-from core.infrastructure.database.models import CaptureImage, BusinessEvent, ApplicationLog, Camera, CameraStatus
+from core.infrastructure.database.models import (
+    ApplicationLog,
+    BusinessEvent,
+    Camera,
+    CameraStatus,
+    CaptureImage,
+    MqttOutboxEvent,
+)
 from core.infrastructure.database.pagination import Page, paginate
 from .config import CameraConfig
 
@@ -56,10 +64,11 @@ document.getElementById('s3-form').onsubmit=async e=>{e.preventDefault();try{awa
 document.getElementById('mqtt-test').onclick=async()=>{const o=document.getElementById('mqtt-result');o.textContent='正在连接 Broker 并发布测试消息…';try{const d=await api('/api/system-settings/test-mqtt',{method:'POST'});o.textContent=d.message;refreshMqttStatus()}catch(e){o.textContent=e.message}};document.getElementById('s3-test').onclick=async()=>{const o=document.getElementById('s3-result');o.textContent='测试中…';try{const d=await api('/api/system-settings/test-s3',{method:'POST'});o.textContent=d.message}catch(e){o.textContent=e.message}};async function refreshMqttStatus(){try{const s=await api('/api/system-settings/mqtt-status');document.getElementById('mqtt-status').textContent=`状态：${s.enabled?(s.connected?'已连接':'等待连接'):'未启用'} · Outbox 待发送 ${s.pending_events} 条 · Topic ${s.topic}`}catch(e){}}load();setInterval(refreshMqttStatus,5000);
 </script>'''
 
-LOGS_BODY = r'''<div class="toolbar"><label>事件类型 <select id="type"><option value="">全部事件</option><option>CaptureEvent</option><option>QualityEvent</option><option>SaveEvent</option><option>UploadEvent</option><option>camera.online</option><option>camera.offline</option><option>capture.created</option><option>capture.saved</option><option>upload.complete</option><option>upload.error</option></select></label><label>摄像头 <select id="camera"><option value="">全部摄像头</option></select></label><button id="reload">刷新</button><span id="count" class="muted"></span></div><section class="card"><div id="events"></div></section><div class="toolbar"><button id="prev">上一页</button><button id="next">下一页</button></div>'''
+LOGS_BODY = r'''<div class="toolbar"><label>事件类型 <select id="type"><option value="">全部事件</option><option>camera.online</option><option>camera.offline</option><option>capture.created</option><option>capture.saved</option><option>capture.missed</option><option>capture.failed</option><option>capture.detected</option><option>quality.face_rejected</option><option>quality.face_accepted</option><option>artifact.save_failed</option><option>artifact.saved</option><option>upload.complete</option><option>upload.error</option></select></label><label>摄像头 <select id="camera"><option value="">全部摄像头</option></select></label><button id="reload">刷新</button><span id="count" class="muted"></span></div><section class="card"><div id="events"></div></section><div class="toolbar"><button id="prev">上一页</button><button id="next">下一页</button></div>'''
 LOGS_SCRIPT = r"""<script>
 const typeFilter=document.getElementById('type'),cameraFilter=document.getElementById('camera'),eventList=document.getElementById('events'),countLabel=document.getElementById('count');let page=1,totalPages=0;
-async function loadEvents(reset=false){if(reset)page=1;const q=new URLSearchParams({page,page_size:50});if(typeFilter.value)q.set('event_type',typeFilter.value);if(cameraFilter.value)q.set('camera_id',cameraFilter.value);const d=await(await fetch('/api/events?'+q)).json();const selected=cameraFilter.value;cameraFilter.innerHTML='<option value="">全部摄像头</option>';for(const c of d.cameras)cameraFilter.add(new Option(c,c));cameraFilter.value=selected;totalPages=d.pagination.total_pages;countLabel.textContent=`共 ${d.total} 条 · 第 ${page}/${totalPages||0} 页`;eventList.innerHTML='';for(const e of d.items){const row=document.createElement('div');row.className='event';const time=document.createElement('small');time.textContent=e.ts||'';const typ=document.createElement('div');const name=document.createElement('b');name.textContent=e.event_type||'Event';const status=document.createElement('span');status.className='pill';status.textContent=e.status||e.event||'—';typ.append(name,document.createElement('br'),status);const detail=document.createElement('div');detail.className='meta';detail.textContent=[e.camera_id,e.artifact,e.path,e.face_count!==undefined?'faces '+e.face_count:'',e.accepted_face_count!==undefined?'accepted '+e.accepted_face_count:'',e.rejected_face_count!==undefined?'rejected '+e.rejected_face_count:'',e.reasons?e.reasons.join(', '):'',e.error].filter(Boolean).join(' · ');row.append(time,typ,detail);eventList.append(row)}if(!d.items.length)eventList.innerHTML='<div class="empty">暂无该类型事件。</div>';document.getElementById('prev').disabled=page<=1;document.getElementById('next').disabled=page>=totalPages}
+function formatEventTime(value){if(value===null||value===undefined||value==='')return '—';const date=new Date(value);return Number.isNaN(date.getTime())?'—':date.toLocaleString()}
+async function loadEvents(reset=false){if(reset)page=1;const q=new URLSearchParams({page,page_size:50});if(typeFilter.value)q.set('event_type',typeFilter.value);if(cameraFilter.value)q.set('camera_id',cameraFilter.value);const d=await(await fetch('/api/events?'+q)).json();const selected=cameraFilter.value;cameraFilter.innerHTML='<option value="">全部摄像头</option>';for(const c of d.cameras)cameraFilter.add(new Option(c,c));cameraFilter.value=selected;totalPages=d.pagination.total_pages;countLabel.textContent=`共 ${d.total} 条 · 第 ${page}/${totalPages||0} 页`;eventList.innerHTML='';for(const e of d.items){const row=document.createElement('div');row.className='event';const times=document.createElement('div');times.className='meta';const created=document.createElement('small');created.textContent='创建时间：'+formatEventTime(e.created_at_ms);const pushed=document.createElement('small');pushed.textContent='推送时间：'+(e.published_at_ms?formatEventTime(e.published_at_ms):(e.push_status==='pending'?'待推送':(e.push_status==='not_queued'?'未入队':'—')));times.append(created,document.createElement('br'),pushed);const typ=document.createElement('div');const name=document.createElement('b');name.textContent=e.event_type||'—';const status=document.createElement('span');status.className='pill';status.textContent=e.status||'—';typ.append(name,document.createElement('br'),status);const detail=document.createElement('div');detail.className='meta';detail.textContent=[e.camera_id,e.artifact,e.path,e.face_count!==undefined?'faces '+e.face_count:'',e.accepted_face_count!==undefined?'accepted '+e.accepted_face_count:'',e.rejected_face_count!==undefined?'rejected '+e.rejected_face_count:'',e.reasons?e.reasons.join(', '):'',e.error].filter(Boolean).join(' · ');row.append(times,typ,detail);eventList.append(row)}if(!d.items.length)eventList.innerHTML='<div class="empty">暂无该类型事件。</div>';document.getElementById('prev').disabled=page<=1;document.getElementById('next').disabled=page>=totalPages}
 document.getElementById('reload').onclick=()=>loadEvents(true);typeFilter.onchange=()=>loadEvents(true);cameraFilter.onchange=()=>loadEvents(true);document.getElementById('prev').onclick=()=>{if(page>1){page--;loadEvents()}};document.getElementById('next').onclick=()=>{if(page<totalPages){page++;loadEvents()}};loadEvents();
 </script>"""
 
@@ -494,13 +503,30 @@ def create_app(engine: RuntimeEngine) -> FastAPI:
             try: paging = Page(page, size)
             except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc))
             with engine.database.sessions() as session:
-                criteria = [BusinessEvent.event_type != "CaptureManifest"]
+                criteria = [BusinessEvent.event_type != "capture.manifest"]
                 if event_type: criteria.append(BusinessEvent.event_type == event_type)
                 if camera_id: criteria.append(BusinessEvent.camera_id == camera_id)
                 result = paginate(session, BusinessEvent, paging, *criteria,
                                   order_by=(desc(BusinessEvent.timestamp_ms), desc(BusinessEvent.id)))
                 camera_ids = sorted(set(session.scalars(select(Camera.id)).all()) | set(session.scalars(select(BusinessEvent.camera_id).where(BusinessEvent.camera_id.is_not(None)).distinct()).all()))
-                items = [json.loads(row.payload_json) for row in result["items"]]
+                rows = result["items"]
+                items = [json.loads(row.payload_json) for row in rows]
+                event_ids = [item["event_id"] for item in items if item.get("event_id")]
+                outbox_by_id = {}
+                if event_ids:
+                    outbox_rows = session.scalars(
+                        select(MqttOutboxEvent).where(MqttOutboxEvent.event_id.in_(event_ids))
+                    ).all()
+                    outbox_by_id = {row.event_id: row for row in outbox_rows}
+                for row, item in zip(rows, items):
+                    outbox = outbox_by_id.get(item.get("event_id"))
+                    item["created_at_ms"] = row.timestamp_ms
+                    item["published_at_ms"] = outbox.published_at_ms if outbox else None
+                    item["push_status"] = (
+                        "published" if outbox and outbox.published_at_ms is not None
+                        else "pending" if outbox
+                        else "not_queued"
+                    )
                 return {"total": result["pagination"]["total"], "items": items,
                         "pagination": result["pagination"], "cameras": camera_ids}
         path = getattr(getattr(engine, "event_log", None), "path", None)
@@ -510,9 +536,18 @@ def create_app(engine: RuntimeEngine) -> FastAPI:
                 for line in f:
                     try: row = json.loads(line)
                     except json.JSONDecodeError: continue
-                    kind = row.get("event_type") or ("CaptureEvent" if row.get("event") in {"capture_saved", "capture_miss"} else "RuntimeEvent")
+                    kind = row.get("event_type") or "runtime.unknown"
                     row["event_type"] = kind
-                    if kind == "CaptureManifest" or (event_type and kind != event_type) or (camera_id and row.get("camera_id") != camera_id): continue
+                    if kind == "capture.manifest" or (event_type and kind != event_type) or (camera_id and row.get("camera_id") != camera_id): continue
+                    timestamp = row.get("timestamp_ms")
+                    if not isinstance(timestamp, (int, float)):
+                        try:
+                            timestamp = int(datetime.fromisoformat(str(row.get("ts", "")).replace("Z", "+00:00")).timestamp() * 1000)
+                        except (ValueError, TypeError):
+                            timestamp = None
+                    row["created_at_ms"] = timestamp
+                    row["published_at_ms"] = None
+                    row["push_status"] = "not_queued"
                     records.append(row)
         records.sort(key=lambda x: x.get("ts", ""), reverse=True)
         size = limit or page_size; start = (page - 1) * size
