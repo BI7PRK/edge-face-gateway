@@ -50,11 +50,13 @@ def test_camera_crud_masks_rtsp_credentials_and_enforces_revision(tmp_path: Path
     created = client.post("/api/cameras", json={
         "id": "gate-01", "name": "Gate", "main_url": "rtsp://admin:super-secret@10.0.0.2/main",
         "sub_url": "rtsp://admin:sub-secret@10.0.0.2/sub", "detection_fps": 5,
+        "min_capture_score": 0.64,
     })
     assert created.status_code == 201
     assert created.json()["stream_mode"] == "dual"
     listing = client.get("/api/cameras").json()["items"][0]
     assert listing["has_main_url"] is True
+    assert listing["min_capture_score"] == 0.64
     assert "super-secret" not in str(listing)
     assert listing["revision"] == 1
 
@@ -65,6 +67,17 @@ def test_camera_crud_masks_rtsp_credentials_and_enforces_revision(tmp_path: Path
     assert updated.status_code == 200
     assert updated.json()["revision"] == 2
     assert updated.json()["stream_mode"] == "dual"
+    assert updated.json()["min_capture_score"] == 0.64
+
+    updated = client.put("/api/cameras/gate-01", json={
+        "name": "Gate North", "main_url": None, "sub_url": None, "keep_substream": True,
+        "detection_fps": 8, "min_capture_score": 0.91, "enabled": True, "revision": 2,
+    })
+    assert updated.status_code == 200
+    assert updated.json()["revision"] == 3
+    assert updated.json()["min_capture_score"] == 0.91
+    with db.sessions() as session:
+        assert repo.list_enabled(session)[0].min_capture_score == 0.91
 
     conflict = client.put("/api/cameras/gate-01", json={
         "name": "Stale", "main_url": None, "sub_url": None, "keep_substream": True,
@@ -72,7 +85,7 @@ def test_camera_crud_masks_rtsp_credentials_and_enforces_revision(tmp_path: Path
     })
     assert conflict.status_code == 409
 
-    disabled = client.put("/api/cameras/gate-01/enabled", json={"enabled": False, "revision": 2})
+    disabled = client.put("/api/cameras/gate-01/enabled", json={"enabled": False, "revision": 3})
     assert disabled.status_code == 200
     assert "gate-01" not in engine.active
     with db.sessions() as session:

@@ -29,6 +29,7 @@ class CameraConfig:
     sub_url: str | None
     enabled: bool = True
     detection_fps: int = 3
+    min_capture_score: float = 0.78
 
     @property
     def mode(self) -> str:

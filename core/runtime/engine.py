@@ -267,10 +267,7 @@ class RuntimeEngine:
         face_quality = max(80, min(100, int(self.capture_cfg.get("face_jpeg_quality", 98))))
         padding = float(self.capture_cfg.get("face_crop_padding_ratio", 0.25))
         faces = map_faces(detections, detection_frame.image.shape, source.image.shape)
-        threshold_raw = self.capture_cfg.get(
-            "min_capture_score",
-            self.capture_cfg.get("min_face_score", self.capture_cfg.get("capture_score_threshold", 0.78)),
-        )
+        threshold_raw = getattr(runtime.cfg, "min_capture_score", 0.78)
         try:
             capture_score_threshold = float(threshold_raw)
             if not math.isfinite(capture_score_threshold):

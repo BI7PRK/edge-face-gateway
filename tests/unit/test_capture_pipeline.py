@@ -91,7 +91,7 @@ def test_rejected_face_is_not_saved_as_face_crop(tmp_path: Path):
     assert "underexposed" in quality_events[0]["reasons"]
 
 
-def test_capture_score_threshold_rejects_below_default_and_accepts_exactly_078(tmp_path: Path):
+def test_capture_score_threshold_uses_camera_setting_and_accepts_exactly_at_threshold(tmp_path: Path):
     engine = object.__new__(RuntimeEngine)
     engine.capture_cfg = {"cooldown_seconds": 0, "jpeg_quality": 96,
                           "face_jpeg_quality": 98, "face_crop_padding_ratio": 0.25,
@@ -102,12 +102,12 @@ def test_capture_score_threshold_rejects_below_default_and_accepts_exactly_078(t
     engine.event_log = EventSink()
     source_image = np.random.default_rng(11).integers(50, 200, (300, 400, 3), dtype=np.uint8)
     detection = Frame(np.zeros((150, 200, 3), dtype=np.uint8), 10.0, 1795000000.0)
-    runtime = SimpleNamespace(cfg=SimpleNamespace(camera_id="cam-03"), mode="single",
+    runtime = SimpleNamespace(cfg=SimpleNamespace(camera_id="cam-03", min_capture_score=0.80), mode="single",
                               last_capture_mono=0.0, metrics=Metrics(),
                               capture_source=lambda _frame: Frame(source_image, 10.0, 1795000000.0))
     faces = [
-        SimpleNamespace(x1=20, y1=20, x2=100, y2=100, score=0.779, class_id=0),
-        SimpleNamespace(x1=150, y1=20, x2=230, y2=100, score=0.780, class_id=0),
+        SimpleNamespace(x1=20, y1=20, x2=100, y2=100, score=0.799, class_id=0),
+        SimpleNamespace(x1=150, y1=20, x2=230, y2=100, score=0.800, class_id=0),
     ]
 
     engine._maybe_capture(runtime, detection, detection.image, faces)
@@ -118,19 +118,19 @@ def test_capture_score_threshold_rejects_below_default_and_accepts_exactly_078(t
     score_events = [row for row in engine.event_log.rows
                     if row.get("event_type") == "capture.score_rejected"]
     assert len(score_events) == 1
-    assert score_events[0]["min_capture_score"] == 0.78
-    assert score_events[0]["rejected_faces"] == [{"face_index": 1, "confidence": 0.779}]
+    assert score_events[0]["min_capture_score"] == 0.80
+    assert score_events[0]["rejected_faces"] == [{"face_index": 1, "confidence": 0.799}]
     assert runtime.metrics.values["faces_quality_rejected"] == 1
 
 
 def test_capture_with_only_below_threshold_faces_saves_no_images(tmp_path: Path):
     engine = object.__new__(RuntimeEngine)
-    engine.capture_cfg = {"cooldown_seconds": 0, "min_capture_score": 0.78}
+    engine.capture_cfg = {"cooldown_seconds": 0}
     engine.output_dir = tmp_path
     engine.event_log = EventSink()
     source_image = np.zeros((300, 400, 3), dtype=np.uint8)
     detection = Frame(np.zeros((150, 200, 3), dtype=np.uint8), 10.0, 1795000000.0)
-    runtime = SimpleNamespace(cfg=SimpleNamespace(camera_id="cam-low-score"), mode="single",
+    runtime = SimpleNamespace(cfg=SimpleNamespace(camera_id="cam-low-score", min_capture_score=0.78), mode="single",
                               last_capture_mono=0.0, metrics=Metrics(),
                               capture_source=lambda _frame: Frame(source_image, 10.0, 1795000000.0))
     faces = [

@@ -20,6 +20,8 @@ A detection is mapped from detector-frame coordinates to the selected source-fra
 
 Face crops are **image crops only**. The gateway does not perform identity recognition, feature/embedding extraction, person matching, tracking or biometric template creation. These crops can be used as source images for a later, separately designed person-comparison workflow; their suitability depends on camera resolution, focus, motion blur, face size and capture alignment.
 
+`min_capture_score` is configured independently for each camera alongside `detection_fps` in camera management. It defaults to `0.78`; scores must be between `0` and `1`.
+
 Relevant `capture` settings in `config/cameras.yaml`:
 
 | Setting | Default | Purpose |
@@ -27,7 +29,6 @@ Relevant `capture` settings in `config/cameras.yaml`:
 | `jpeg_quality` | 96 | Original and annotated frame JPEG quality |
 | `face_jpeg_quality` | 98 | Face crop JPEG quality |
 | `face_crop_padding_ratio` | 0.25 | Context padding relative to face-box width/height |
-| `min_capture_score` | 0.78 | Minimum detector confidence; face crops at or above this value may be saved |
 | `main_stream_ring_jpeg_quality` | 96 | JPEG quality in the dual-stream main-frame ring |
 | `main_stream_ring_sample_interval_ms` | 200 | Main-frame ring sampling interval |
 
@@ -161,7 +162,7 @@ POST   /api/cameras/{camera_id}/test
 DELETE /api/cameras/{camera_id}
 ```
 
-Create body: `{"id":"gate-01","name":"North Gate","main_url":"rtsp://user:password@camera/main","sub_url":"rtsp://user:password@camera/sub","detection_fps":3}`. Store and back up `data/secrets/camera.key` securely; losing it makes stored stream URLs unrecoverable.
+Create body: `{"id":"gate-01","name":"North Gate","main_url":"rtsp://user:password@camera/main","sub_url":"rtsp://user:password@camera/sub","detection_fps":3,"min_capture_score":0.78}`. Store and back up `data/secrets/camera.key` securely; losing it makes stored stream URLs unrecoverable.
 
 
 ## System settings and cloud storage

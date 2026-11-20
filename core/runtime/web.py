@@ -167,15 +167,15 @@ class SystemMetricsSampler:
         self.thread.join(timeout=2)
 
 
-CAMERAS_BODY = r'''<div class="toolbar"><button id="add">添加摄像头</button><button id="reload">刷新</button><span class="muted" id="message"></span></div><div id="camera-list" class="grid"></div><dialog id="editor" style="background:#151e2b;color:#e8eef7;border:1px solid #29384a;border-radius:12px;max-width:620px;width:95%;padding:22px"><form id="camera-form"><h2 id="form-title">添加摄像头</h2><input type="hidden" id="revision"><label>摄像头 ID<br><input id="camera-id" required maxlength="128" pattern="[A-Za-z0-9_.-]+" style="width:100%"></label><p><label>名称<br><input id="name" required maxlength="200" style="width:100%"></label></p><p><label>主码流 RTSP URL<br><input id="main-url" type="password" autocomplete="new-password" placeholder="rtsp://...（编辑时留空表示不修改）" style="width:100%"></label></p><p><label>子码流 RTSP URL（可选）<br><input id="sub-url" type="password" autocomplete="new-password" placeholder="rtsp://..." style="width:100%"></label></p><p id="single-mode-row" style="display:none"><label><input id="single-mode" type="checkbox"> 切换为单流模式（停止使用子码流）</label></p><p><label>检测帧率 FPS <input id="fps" type="number" min="1" max="30" value="3"></label></p><p><label><input id="enabled" type="checkbox" checked> 启用摄像头</label></p><div class="toolbar"><button type="submit">保存</button><button type="button" id="cancel">取消</button></div><small class="muted">出于安全考虑，已保存的 RTSP 地址不会回显。编辑时主码流地址留空表示保持不变；需要切换为单流模式时勾选对应选项。</small></form></dialog>'''
+CAMERAS_BODY = r'''<div class="toolbar"><button id="add">添加摄像头</button><button id="reload">刷新</button><span class="muted" id="message"></span></div><div id="camera-list" class="grid"></div><dialog id="editor" style="background:#151e2b;color:#e8eef7;border:1px solid #29384a;border-radius:12px;max-width:620px;width:95%;padding:22px"><form id="camera-form"><h2 id="form-title">添加摄像头</h2><input type="hidden" id="revision"><label>摄像头 ID<br><input id="camera-id" required maxlength="128" pattern="[A-Za-z0-9_.-]+" style="width:100%"></label><p><label>名称<br><input id="name" required maxlength="200" style="width:100%"></label></p><p><label>主码流 RTSP URL<br><input id="main-url" type="password" autocomplete="new-password" placeholder="rtsp://...（编辑时留空表示不修改）" style="width:100%"></label></p><p><label>子码流 RTSP URL（可选）<br><input id="sub-url" type="password" autocomplete="new-password" placeholder="rtsp://..." style="width:100%"></label></p><p id="single-mode-row" style="display:none"><label><input id="single-mode" type="checkbox"> 切换为单流模式（停止使用子码流）</label></p><p><label>检测帧率 FPS <input id="fps" type="number" min="1" max="30" value="3"></label></p><p><label>最低抓拍分数 <input id="min-capture-score" type="number" min="0" max="1" step="0.01" value="0.78" required></label></p><p><label><input id="enabled" type="checkbox" checked> 启用摄像头</label></p><div class="toolbar"><button type="submit">保存</button><button type="button" id="cancel">取消</button></div><small class="muted">出于安全考虑，已保存的 RTSP 地址不会回显。编辑时主码流地址留空表示保持不变；需要切换为单流模式时勾选对应选项。</small></form></dialog>'''
 CAMERAS_SCRIPT = r'''<script>
 const list=document.getElementById('camera-list'),dlg=document.getElementById('editor'),form=document.getElementById('camera-form'),msg=document.getElementById('message');let current=null;
 async function api(url,opt={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt});const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.detail||'请求失败');return d}
 function esc(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function load(){try{const d=await api('/api/cameras');list.innerHTML='';for(const c of d.items){const el=document.createElement('section');el.className='card';el.innerHTML=`<h3>${esc(c.name)} <span class="pill">${esc(c.id)}</span></h3><div class="meta">${c.enabled?'已启用':'已禁用'} · ${c.stream_mode==='dual'?'双流':'单流'} · ${c.detection_fps} FPS · ${esc(c.runtime_status||'STOPPED')} · revision ${c.revision}</div><div class="toolbar"><button data-action="edit">编辑</button><button data-action="toggle">${c.enabled?'禁用':'启用'}</button><button data-action="test">测试主码流</button><button data-action="preview">预览</button><button data-action="delete">删除</button></div><div class="meta" data-result></div><img class="feed" style="display:none" data-preview>`;el.querySelector('[data-action=edit]').onclick=()=>edit(c);el.querySelector('[data-action=toggle]').onclick=()=>toggle(c);el.querySelector('[data-action=test]').onclick=()=>test(c,el);el.querySelector('[data-action=preview]').onclick=()=>preview(c,el);el.querySelector('[data-action=delete]').onclick=()=>removeCamera(c);list.append(el)}}catch(e){msg.textContent=e.message}}
-function edit(c){current=c;document.getElementById('form-title').textContent='编辑摄像头';document.getElementById('camera-id').value=c.id;document.getElementById('camera-id').disabled=true;document.getElementById('name').value=c.name;document.getElementById('revision').value=c.revision;document.getElementById('main-url').value='';document.getElementById('sub-url').value='';document.getElementById('main-url').placeholder=c.has_main_url?'已配置（留空不修改）':'请输入主码流 RTSP URL';document.getElementById('sub-url').placeholder=c.stream_mode==='dual'?'已配置（留空保持原配置）':'请输入子码流 URL（可选）';document.getElementById('single-mode-row').style.display='block';document.getElementById('single-mode').checked=false;document.getElementById('fps').value=c.detection_fps;document.getElementById('enabled').checked=c.enabled;dlg.showModal()}
-document.getElementById('add').onclick=()=>{current=null;form.reset();document.getElementById('form-title').textContent='添加摄像头';document.getElementById('camera-id').disabled=false;document.getElementById('fps').value=3;document.getElementById('main-url').placeholder='rtsp://...';document.getElementById('sub-url').placeholder='可选';document.getElementById('single-mode-row').style.display='none';dlg.showModal()};document.getElementById('cancel').onclick=()=>dlg.close();document.getElementById('reload').onclick=load;
-form.onsubmit=async e=>{e.preventDefault();const id=document.getElementById('camera-id').value.trim(),main=document.getElementById('main-url').value.trim(),sub=document.getElementById('sub-url').value.trim(),body={name:document.getElementById('name').value.trim(),main_url:main||null,sub_url:sub||null,detection_fps:Number(document.getElementById('fps').value),enabled:document.getElementById('enabled').checked};try{if(current){body.revision=Number(document.getElementById('revision').value);body.keep_substream=!document.getElementById('single-mode').checked&&!sub; if(document.getElementById('single-mode').checked)body.sub_url=null;await api('/api/cameras/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify(body)})}else{body.main_url=main;await api('/api/cameras',{method:'POST',body:JSON.stringify({id,...body})})}dlg.close();msg.textContent='保存成功';load()}catch(e){msg.textContent=e.message}};
+async function load(){try{const d=await api('/api/cameras');list.innerHTML='';for(const c of d.items){const el=document.createElement('section');el.className='card';el.innerHTML=`<h3>${esc(c.name)} <span class="pill">${esc(c.id)}</span></h3><div class="meta">${c.enabled?'已启用':'已禁用'} · ${c.stream_mode==='dual'?'双流':'单流'} · ${c.detection_fps} FPS · 最低抓拍分数 ${c.min_capture_score} · ${esc(c.runtime_status||'STOPPED')} · revision ${c.revision}</div><div class="toolbar"><button data-action="edit">编辑</button><button data-action="toggle">${c.enabled?'禁用':'启用'}</button><button data-action="test">测试主码流</button><button data-action="preview">预览</button><button data-action="delete">删除</button></div><div class="meta" data-result></div><img class="feed" style="display:none" data-preview>`;el.querySelector('[data-action=edit]').onclick=()=>edit(c);el.querySelector('[data-action=toggle]').onclick=()=>toggle(c);el.querySelector('[data-action=test]').onclick=()=>test(c,el);el.querySelector('[data-action=preview]').onclick=()=>preview(c,el);el.querySelector('[data-action=delete]').onclick=()=>removeCamera(c);list.append(el)}}catch(e){msg.textContent=e.message}}
+function edit(c){current=c;document.getElementById('form-title').textContent='编辑摄像头';document.getElementById('camera-id').value=c.id;document.getElementById('camera-id').disabled=true;document.getElementById('name').value=c.name;document.getElementById('revision').value=c.revision;document.getElementById('main-url').value='';document.getElementById('sub-url').value='';document.getElementById('main-url').placeholder=c.has_main_url?'已配置（留空不修改）':'请输入主码流 RTSP URL';document.getElementById('sub-url').placeholder=c.stream_mode==='dual'?'已配置（留空保持原配置）':'请输入子码流 URL（可选）';document.getElementById('single-mode-row').style.display='block';document.getElementById('single-mode').checked=false;document.getElementById('fps').value=c.detection_fps;document.getElementById('min-capture-score').value=c.min_capture_score;document.getElementById('enabled').checked=c.enabled;dlg.showModal()}
+document.getElementById('add').onclick=()=>{current=null;form.reset();document.getElementById('form-title').textContent='添加摄像头';document.getElementById('camera-id').disabled=false;document.getElementById('fps').value=3;document.getElementById('min-capture-score').value=0.78;document.getElementById('main-url').placeholder='rtsp://...';document.getElementById('sub-url').placeholder='可选';document.getElementById('single-mode-row').style.display='none';dlg.showModal()};document.getElementById('cancel').onclick=()=>dlg.close();document.getElementById('reload').onclick=load;
+form.onsubmit=async e=>{e.preventDefault();const id=document.getElementById('camera-id').value.trim(),main=document.getElementById('main-url').value.trim(),sub=document.getElementById('sub-url').value.trim(),body={name:document.getElementById('name').value.trim(),main_url:main||null,sub_url:sub||null,detection_fps:Number(document.getElementById('fps').value),min_capture_score:Number(document.getElementById('min-capture-score').value),enabled:document.getElementById('enabled').checked};try{if(current){body.revision=Number(document.getElementById('revision').value);body.keep_substream=!document.getElementById('single-mode').checked&&!sub; if(document.getElementById('single-mode').checked)body.sub_url=null;await api('/api/cameras/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify(body)})}else{body.main_url=main;await api('/api/cameras',{method:'POST',body:JSON.stringify({id,...body})})}dlg.close();msg.textContent='保存成功';load()}catch(e){msg.textContent=e.message}};
 async function toggle(c){try{await api('/api/cameras/'+encodeURIComponent(c.id)+'/enabled',{method:'PUT',body:JSON.stringify({enabled:!c.enabled,revision:c.revision})});load()}catch(e){msg.textContent=e.message}}async function removeCamera(c){if(!confirm('确定删除摄像头 '+c.id+'？历史抓拍图片不会删除。'))return;try{await api('/api/cameras/'+encodeURIComponent(c.id),{method:'DELETE',body:JSON.stringify({revision:c.revision})});load()}catch(e){msg.textContent=e.message}}async function test(c,el){const out=el.querySelector('[data-result]');out.textContent='正在测试…';try{const d=await api('/api/cameras/'+encodeURIComponent(c.id)+'/test',{method:'POST'});out.textContent=d.ok?`连接成功 · ${d.width}×${d.height} · ${d.elapsed_ms} ms`:d.error}catch(e){out.textContent=e.message}}function preview(c,el){const img=el.querySelector('[data-preview]');img.style.display=img.style.display==='none'?'block':'none';img.src='/stream/'+encodeURIComponent(c.id)+'?t='+Date.now()}load();
 </script>'''
 
@@ -193,6 +193,7 @@ class CameraCreate(BaseModel):
     main_url: str = Field(min_length=1, max_length=2048)
     sub_url: str | None = Field(default=None, max_length=2048)
     detection_fps: int = Field(default=3, ge=1, le=30)
+    min_capture_score: float = Field(default=0.78, ge=0.0, le=1.0)
     enabled: bool = True
 
 class CameraUpdate(BaseModel):
@@ -201,6 +202,7 @@ class CameraUpdate(BaseModel):
     sub_url: str | None = Field(default=None, max_length=2048)
     keep_substream: bool = True
     detection_fps: int = Field(default=3, ge=1, le=30)
+    min_capture_score: float | None = Field(default=None, ge=0.0, le=1.0)
     enabled: bool = True
     revision: int = Field(ge=1)
 
@@ -403,8 +405,11 @@ def create_app(engine: RuntimeEngine) -> FastAPI:
         runtime_status = "STOPPED"
         if runtime is not None:
             runtime_status = "ONLINE" if runtime.main.connected and (runtime.sub is None or runtime.sub.connected) else ("CONNECTING" if runtime.main.thread and runtime.main.thread.is_alive() else "ERROR")
+        camera_config = json.loads(row.config_json or "{}")
         return {"id": row.id, "name": row.name, "enabled": row.enabled, "stream_mode": row.stream_mode,
-                "detection_fps": row.detection_fps, "revision": row.revision, "has_main_url": bool(row.main_url_encrypted),
+                "detection_fps": row.detection_fps,
+                "min_capture_score": float(camera_config.get("min_capture_score", 0.78)),
+                "revision": row.revision, "has_main_url": bool(row.main_url_encrypted),
                 "runtime_status": runtime_status}
 
     @app.get("/api/system-settings")
@@ -521,9 +526,13 @@ def create_app(engine: RuntimeEngine) -> FastAPI:
                 if engine.camera_repository.get(session, body.id):
                     raise HTTPException(409, "摄像头 ID 已存在")
                 row = engine.camera_repository.create(session, camera_id=body.id, name=body.name.strip(),
-                    main_url=body.main_url, sub_url=body.sub_url, detection_fps=body.detection_fps, enabled=body.enabled)
+                    main_url=body.main_url, sub_url=body.sub_url, detection_fps=body.detection_fps,
+                    min_capture_score=body.min_capture_score, enabled=body.enabled)
                 result = _camera_row(row)
-            engine.add_or_replace_camera(CameraConfig(body.id, body.name.strip(), body.main_url, body.sub_url, body.enabled, body.detection_fps))
+            engine.add_or_replace_camera(CameraConfig(
+                body.id, body.name.strip(), body.main_url, body.sub_url, body.enabled,
+                body.detection_fps, body.min_capture_score,
+            ))
             log.info("camera created camera_id=%s enabled=%s stream_mode=%s", body.id, body.enabled, result["stream_mode"], extra={"category": "CAMERA", "camera_id": body.id})
             return result
         except HTTPException: raise
@@ -541,10 +550,13 @@ def create_app(engine: RuntimeEngine) -> FastAPI:
                 if row is None: raise HTTPException(404, "摄像头不存在")
                 engine.camera_repository.update(session, row, name=body.name.strip(), main_url=body.main_url,
                     sub_url=body.sub_url, keep_sub=body.keep_substream, detection_fps=body.detection_fps,
-                    enabled=body.enabled, expected_revision=body.revision)
+                    min_capture_score=body.min_capture_score, enabled=body.enabled,
+                    expected_revision=body.revision)
                 main_url = engine.camera_repository.cipher.decrypt(row.main_url_encrypted)
                 sub_url = engine.camera_repository.cipher.decrypt(row.sub_url_encrypted)
-                cfg = CameraConfig(row.id, row.name, main_url, sub_url, row.enabled, row.detection_fps)
+                camera_config = json.loads(row.config_json or "{}")
+                cfg = CameraConfig(row.id, row.name, main_url, sub_url, row.enabled, row.detection_fps,
+                                   float(camera_config.get("min_capture_score", 0.78)))
                 result = _camera_row(row)
             engine.add_or_replace_camera(cfg)
             log.info("camera updated camera_id=%s revision=%s enabled=%s stream_mode=%s", camera_id, result["revision"], result["enabled"], result["stream_mode"], extra={"category": "CAMERA", "camera_id": camera_id})
@@ -565,7 +577,9 @@ def create_app(engine: RuntimeEngine) -> FastAPI:
                 engine.camera_repository.set_enabled(session, row, body.enabled, body.revision)
                 main_url = engine.camera_repository.cipher.decrypt(row.main_url_encrypted)
                 sub_url = engine.camera_repository.cipher.decrypt(row.sub_url_encrypted)
-                cfg = CameraConfig(row.id, row.name, main_url, sub_url, row.enabled, row.detection_fps)
+                camera_config = json.loads(row.config_json or "{}")
+                cfg = CameraConfig(row.id, row.name, main_url, sub_url, row.enabled, row.detection_fps,
+                                   float(camera_config.get("min_capture_score", 0.78)))
             engine.add_or_replace_camera(cfg)
             log.info("camera enabled state changed camera_id=%s enabled=%s", camera_id, body.enabled, extra={"category": "CAMERA", "camera_id": camera_id})
             return {"ok": True, "enabled": body.enabled}

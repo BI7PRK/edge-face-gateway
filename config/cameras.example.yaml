@@ -22,8 +22,6 @@ capture:
   jpeg_quality: 96
   face_jpeg_quality: 98
   face_crop_padding_ratio: 0.25
-  # Minimum detector confidence required before saving a face crop.
-  min_capture_score: 0.78
   # Generic software-side quality gates; calibrate with real day/night samples.
   quality_assessment:
     min_face_width_px: 48
